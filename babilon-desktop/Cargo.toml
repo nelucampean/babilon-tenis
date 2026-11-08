@@ -1,0 +1,44 @@
+[package]
+name = "babilon-desktop"
+version = "0.5.0"
+edition = "2021"
+description = "Accessible desktop tennis (Bevy). Reuses babilon-core; same keyboard + stereo + screen-reader model as the web version."
+
+[[bin]]
+name = "babilon-desktop"
+path = "src/main.rs"
+
+[dependencies]
+babilon-core = { path = "../babilon-core" }
+# Minimal Bevy features: full default pulls bevy_gilrs -> libudev-sys,
+# which needs libudev-dev (not installed, no sudo here). Everything the
+# 2D game needs, plus mp3 (umpire clips are MP3; default is vorbis only).
+bevy = { version = "0.16", default-features = false, features = [
+  "std",
+  "async_executor",
+  "bevy_asset",
+  "bevy_audio",
+  "bevy_color",
+  "bevy_core_pipeline",
+  "bevy_log",
+  "bevy_render",
+  "bevy_sprite",
+  "bevy_state",
+  "bevy_text",
+  "bevy_ui",
+  "bevy_window",
+  "bevy_winit",
+  "default_font",
+  "multi_threaded",
+  "png",
+  "mp3",
+  "vorbis",
+  "x11",
+] }
+rand = "0.8"
+rodio = "=0.20.1"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Same alsa-sys cpal 0.15 uses (unified, no `links` conflict): lets us
+# install a silent ALSA error handler so card-probing stops spamming stderr.
+alsa-sys = "=0.3.1"

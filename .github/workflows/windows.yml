@@ -1,0 +1,28 @@
+name: windows-build
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build (Windows exe)
+        run: cargo build --release -p babilon-desktop
+      - name: Stage package (exe + umpire MP3s)
+        run: |
+          mkdir package
+          cp target/release/babilon-desktop.exe package/BabilonTennis.exe
+          mkdir package/assets
+          cp -r babilon-desktop/assets package/assets
+          cp README.md package/ 2>/dev/null || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BabilonTennis-windows-x86_64
+          path: package/

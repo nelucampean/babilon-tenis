@@ -1,0 +1,3 @@
+[workspace]
+members = ["babilon-core", "babilon-desktop"]
+resolver = "2"

@@ -1,0 +1,21 @@
+# Rust build output
+/target/
+**/target/
+
+# Cargo lock for libraries is committed, but keep backups out
+*.orig
+*.bk
+
+# Editor / OS noise
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Local test / profiling output
+/tmp/
+*.profraw
+perf.data*
+.openidea/
