@@ -10,6 +10,9 @@ path = "src/main.rs"
 
 [dependencies]
 babilon-core = { path = "../babilon-core" }
+# accesskit must match the version Bevy 0.16 bundles (0.18): used to build
+# explicit AccessibilityNode trees for the side panel (screen readers).
+accesskit = "0.18"
 # Minimal Bevy features: full default pulls bevy_gilrs -> libudev-sys,
 # which needs libudev-dev (not installed, no sudo here). Everything the
 # 2D game needs, plus mp3 (umpire clips are MP3; default is vorbis only).
@@ -20,6 +23,7 @@ bevy = { version = "0.16", default-features = false, features = [
   "bevy_audio",
   "bevy_color",
   "bevy_core_pipeline",
+  "bevy_input_focus",
   "bevy_log",
   "bevy_render",
   "bevy_sprite",
@@ -34,6 +38,7 @@ bevy = { version = "0.16", default-features = false, features = [
   "mp3",
   "vorbis",
   "x11",
+  "accesskit_unix",
 ] }
 directories = "6.0.0"
 rand = "0.8"

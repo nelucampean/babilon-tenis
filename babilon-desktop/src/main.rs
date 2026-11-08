@@ -6,6 +6,9 @@
 //! Stereo MP3s live in `assets/sunete/` (copied from the web version).
 
 use babilon_core::{Difficulty, Match, Phase, RallyOutcome, Shot, LANE_STEP, MAX_DIR};
+use accesskit::{Action, Live, Role};
+use bevy::a11y::{AccessibilityNode, ActionRequest as A11yActionRequest};
+use bevy::input_focus::{InputDispatchPlugin, InputFocus};
 use bevy::ecs::hierarchy::ChildOf;
 use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::log::LogPlugin;
@@ -149,6 +152,47 @@ struct UiFonts {
     bold: Handle<Font>,
 }
 
+/// Plain readable text node for the side panel.
+///
+/// Bevy 0.16 only creates AccessKit nodes for `Button` / `Image` / `Label`
+/// entities — a bare `Text` is invisible to JAWS/NVDA. Every info-block line
+/// therefore gets `Label` + an explicit `AccessibilityNode` (Role::Label,
+/// value = visible text) so screen readers can freely browse it. The node
+/// value is kept in sync with the `Text` in `refresh_ui` (Bevy only sets it
+/// once at spawn, so dynamic text would otherwise go stale).
+fn static_a11y_node(text: &str) -> AccessibilityNode {
+    let mut node = accesskit::Node::new(Role::Label);
+    node.set_value(text.to_string().into_boxed_str());
+    AccessibilityNode::from(node)
+}
+
+/// Live announcement node for the status line ("Acum lovește!", scores…).
+///
+/// Role::Status + Live::Polite + atomic => NVDA/JAWS speak every update
+/// without moving focus, like an ARIA live region. Same staleness note as
+/// above: `refresh_ui` rewrites the value on every announcement.
+/// Advertises the Focus action so a screen reader can move focus onto it
+/// (and our `I` key moves Bevy's `InputFocus` here from the keyboard side).
+fn live_a11y_node(text: &str) -> AccessibilityNode {
+    let mut node = accesskit::Node::new(Role::Status);
+    node.set_value(text.to_string().into_boxed_str());
+    node.set_live(Live::Polite);
+    node.set_live_atomic();
+    node.add_action(Action::Focus);
+    AccessibilityNode::from(node)
+}
+
+/// Handles of the side info block, so a key press can move screen-reader
+/// focus onto it (`I`) and back to the game (`Esc`).
+#[derive(Resource)]
+struct InfoPanel {
+    status: Entity,
+}
+
+fn set_node_value(node: &mut AccessibilityNode, text: &str) {
+    node.set_value(text.to_string().into_boxed_str());
+}
+
 fn spawn_sparks(
     commands: &mut Commands,
     assets: &ParticleAssets,
@@ -283,14 +327,16 @@ fn spawn_athlete(
         ));
         racket = mount.id();
         mount.with_children(|q| {
-            rect_part(q, meshes, mats, 7., 30., navy, 0., 20., 0.1); // handle
-            circ_part(q, meshes, mats, 17., frame, 0., -8., 0.2); // frame
-            circ_part(q, meshes, mats, 13., strings, 0., -8., 0.3); // strings bed
-            rect_part(q, meshes, mats, 1.5, 22., white, -6., -8., 0.4);
-            rect_part(q, meshes, mats, 1.5, 22., white, 0., -8., 0.4);
-            rect_part(q, meshes, mats, 1.5, 22., white, 6., -8., 0.4);
-            rect_part(q, meshes, mats, 22., 1.5, white, 0., -14., 0.4);
-            rect_part(q, meshes, mats, 22., 1.5, white, 0., -2., 0.4);
+            // Racket held in the hand (mount origin): handle grips down
+            // through the hand, head points UP (frame above the hand).
+            rect_part(q, meshes, mats, 7., 30., navy, 0., 0., 0.1); // handle
+            circ_part(q, meshes, mats, 17., frame, 0., 30., 0.2); // frame
+            circ_part(q, meshes, mats, 13., strings, 0., 30., 0.3); // strings bed
+            rect_part(q, meshes, mats, 1.5, 22., white, -6., 30., 0.4);
+            rect_part(q, meshes, mats, 1.5, 22., white, 0., 30., 0.4);
+            rect_part(q, meshes, mats, 1.5, 22., white, 6., 30., 0.4);
+            rect_part(q, meshes, mats, 22., 1.5, white, 0., 24., 0.4);
+            rect_part(q, meshes, mats, 22., 1.5, white, 0., 36., 0.4);
         });
     });
     // orient arm + racket mounts
@@ -346,6 +392,10 @@ fn main() {
     .insert_resource(vols)
     .insert_resource(saved.mode)
     .insert_resource(Pending::default())
+    // Input focus tracking: required for ANY AccessKit tree updates
+    // (bevy_winit skips them entirely without `InputFocus`), and lets
+    // `I` / `Esc` move screen-reader focus between game and info panel.
+    .add_plugins(InputDispatchPlugin)
     .add_systems(Startup, setup)
     // chained: keyboard Space and the 1.4s miss-timer race otherwise,
     // and flight landings must run before the timeout check.
@@ -354,6 +404,8 @@ fn main() {
         (
             keyboard,
             settings_keys,
+            info_focus_keys,
+            a11y_focus_requests,
             drift_paddles,
             ball_flight,
             particle_fx,
@@ -552,14 +604,26 @@ fn setup(
     });
 
     // Accessible HUD: side panel with Inter (full Romanian diacritics),
-    // docked right of the court so no text covers the game. Real Bevy UI
-    // text nodes -> exposed via AccessKit to NVDA / Narrator / VoiceOver.
+    // docked right of the court so no text covers the game. Every line gets
+    // `Label` + an explicit `AccessibilityNode`, otherwise Bevy 0.16 exposes
+    // nothing (bare `Text` has no AccessKit node) and JAWS/NVDA stay silent.
+    // The status line is a polite live region (Role::Status) so announcements
+    // speak automatically; the rest are plain labels for free browse reading.
+    // The panel itself is a Region so the block navigates as one group.
     let gold = Color::srgb(0.98, 0.79, 0.40);
     let ink = Color::srgb(0.93, 0.97, 0.97);
     let muted = Color::srgb(0.72, 0.82, 0.85);
     let panel = Color::srgba(0.03, 0.10, 0.16, 0.96);
     let reg = fonts.regular.clone();
     let bold = fonts.bold.clone();
+    let title_txt = "BABILON TENNIS";
+    let score_txt = "Seturi 0 – 0\nGame-uri 0 – 0\nTu 0, calculator 0";
+    let status_txt = "Meci nou. Apasă S pentru serviciu.";
+    let shot_txt = "Direcție: centru • Lovitură: plată";
+    let phase_txt = "PREGĂTIT PENTRU SERVICIU";
+    let mode_txt = "Accesibil • Normal • Volum 100/100/65 • Stereo normal";
+    let help_txt = "S serviciu • Spațiu lovire\n←/→ direcție • 1/2/3 lovitură\nR repetă • P pauză • T test audio\nG dificultate • M mod audio • N stereo\nC grup volum • Z/X volum\nI focusează anunțurile • Esc înapoi la joc";
+    let mut info_status = Entity::PLACEHOLDER;
     commands
         .spawn(Node {
             width: Val::Percent(100.),
@@ -568,6 +632,11 @@ fn setup(
             ..default()
         })
         .with_children(|root| {
+            let mut panel_node = accesskit::Node::new(Role::Region);
+            panel_node.set_label("Panou informații joc");
+            // Focusable, so JAWS/NVDA can land on the whole block and then
+            // browse its lines with the virtual cursor.
+            panel_node.add_action(Action::Focus);
             root.spawn((
                 Node {
                     width: Val::Px(268.),
@@ -578,50 +647,66 @@ fn setup(
                     ..default()
                 },
                 BackgroundColor(panel),
+                AccessibilityNode::from(panel_node),
             ))
             .with_children(|p| {
                 p.spawn((
-                    Text::new("BABILON TENNIS"),
+                    Text::new(title_txt),
                     TextFont { font: bold.clone(), font_size: 15.0, ..default() },
                     TextColor(gold),
+                    Label,
+                    static_a11y_node(title_txt),
                 ));
                 p.spawn((
                     ScoreText,
-                    Text::new("Seturi 0 – 0\nGame-uri 0 – 0\nTu 0, calculator 0"),
+                    Text::new(score_txt),
                     TextFont { font: bold.clone(), font_size: 19.0, ..default() },
                     TextColor(ink),
+                    Label,
+                    static_a11y_node(score_txt),
                 ));
-                p.spawn((
+                info_status = p.spawn((
                     StatusText,
-                    Text::new("Meci nou. Apasă S pentru serviciu."),
+                    Text::new(status_txt),
                     TextFont { font: reg.clone(), font_size: 19.0, ..default() },
                     TextColor(ink),
-                ));
+                    live_a11y_node(status_txt),
+                )).id();
                 p.spawn((
                     ShotText,
-                    Text::new("Direcție: centru • Lovitură: plată"),
+                    Text::new(shot_txt),
                     TextFont { font: reg.clone(), font_size: 14.0, ..default() },
                     TextColor(ink),
+                    Label,
+                    static_a11y_node(shot_txt),
                 ));
                 p.spawn((
                     PhaseText,
-                    Text::new("PREGĂTIT PENTRU SERVICIU"),
+                    Text::new(phase_txt),
                     TextFont { font: bold.clone(), font_size: 13.0, ..default() },
                     TextColor(gold),
+                    Label,
+                    static_a11y_node(phase_txt),
                 ));
                 p.spawn((
                     ModeText,
-                    Text::new("Accesibil • Normal • Volum 100/100/65 • Stereo normal"),
+                    Text::new(mode_txt),
                     TextFont { font: reg.clone(), font_size: 13.0, ..default() },
                     TextColor(muted),
+                    Label,
+                    static_a11y_node(mode_txt),
                 ));
                 p.spawn((
-                    Text::new("S serviciu • Spațiu lovire\n←/→ direcție • 1/2/3 lovitură\nR repetă • P pauză • T test audio\nG dificultate • M mod audio • N stereo\nC grup volum • Z/X volum"),
+                    Text::new(help_txt),
                     TextFont { font: reg.clone(), font_size: 12.0, ..default() },
                     TextColor(muted),
+                    Label,
+                    static_a11y_node(help_txt),
                 ));
             });
         });
+    // Remember the status line so `I` can move screen-reader focus onto it.
+    commands.insert_resource(InfoPanel { status: info_status });
 }
 
 // ---- game flow (mirrors serve()/incoming()/hit()/point() in JS) ------------
@@ -1165,6 +1250,48 @@ fn settings_keys(
     }
 }
 
+/// Screen-reader focus control for the info block.
+///
+/// * `I` moves Bevy's `InputFocus` (mirrored to AccessKit focus) onto the
+///   live status line, so JAWS/NVDA jump to the announcements and keep
+///   speaking them. From there the virtual cursor can browse the whole
+///   side panel (score, shot, phase, volumes).
+/// * `Esc` clears focus back to the game window, so play keys stay first.
+/// Game input reads `ButtonInput` directly, so focus never breaks play.
+fn info_focus_keys(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut focus: ResMut<InputFocus>,
+    panel: Option<Res<InfoPanel>>,
+) {
+    if keys.just_pressed(KeyCode::KeyI) {
+        if let Some(p) = panel {
+            focus.set(p.status);
+        }
+    } else if keys.just_pressed(KeyCode::Escape) {
+        focus.clear();
+    }
+}
+
+/// Screen-reader → game focus requests.
+///
+/// When JAWS/NVDA itself moves (virtual cursor, touch exploration), winit
+/// forwards an AccessKit `Focus` action as an `ActionRequest` event — honor
+/// it so focus stays in sync both ways. Unknown/stale targets are ignored.
+fn a11y_focus_requests(
+    mut events: EventReader<A11yActionRequest>,
+    mut focus: ResMut<InputFocus>,
+    nodes: Query<(), With<AccessibilityNode>>,
+) {
+    for req in events.read() {
+        if req.action == Action::Focus {
+            let e = Entity::from_bits(req.target.0);
+            if nodes.contains(e) {
+                focus.set(e);
+            }
+        }
+    }
+}
+
 /// Paddles drift toward their targets (JS approach lerp), NOT toward
 /// the ball — the old ball-follow hid the ←/→ aim completely.
 /// Runs even with no flight active, so ←/→ moves the paddle + aim
@@ -1418,11 +1545,11 @@ fn refresh_ui(
     vols: Res<Volumes>,
     mode: Res<AudioMode>,
     sfx: Option<Res<Sfx>>,
-    mut score_q: Query<&mut Text, With<ScoreText>>,
-    mut status_q: Query<&mut Text, (With<StatusText>, Without<ScoreText>)>,
-    mut shot_q: Query<&mut Text, (With<ShotText>, Without<ScoreText>, Without<StatusText>)>,
-    mut phase_q: Query<&mut Text, (With<PhaseText>, Without<ScoreText>, Without<StatusText>, Without<ShotText>)>,
-    mut mode_q: Query<&mut Text, (With<ModeText>, Without<ScoreText>, Without<StatusText>, Without<ShotText>, Without<PhaseText>)>,
+    mut score_q: Query<(&mut Text, Option<&mut AccessibilityNode>), With<ScoreText>>,
+    mut status_q: Query<(&mut Text, Option<&mut AccessibilityNode>), (With<StatusText>, Without<ScoreText>)>,
+    mut shot_q: Query<(&mut Text, Option<&mut AccessibilityNode>), (With<ShotText>, Without<ScoreText>, Without<StatusText>)>,
+    mut phase_q: Query<(&mut Text, Option<&mut AccessibilityNode>), (With<PhaseText>, Without<ScoreText>, Without<StatusText>, Without<ShotText>)>,
+    mut mode_q: Query<(&mut Text, Option<&mut AccessibilityNode>), (With<ModeText>, Without<ScoreText>, Without<StatusText>, Without<ShotText>, Without<PhaseText>)>,
 ) {
     if !tennis.is_changed() && !vols.is_changed() && !mode.is_changed() {
         return;
@@ -1435,27 +1562,43 @@ fn refresh_ui(
         tennis.m.games[1],
         tennis.m.score_text_ro()
     );
-    for mut t in &mut score_q {
+    for (mut t, a11y) in &mut score_q {
         **t = score_line.clone();
+        if let Some(mut node) = a11y {
+            set_node_value(&mut node, &score_line);
+        }
     }
-    for mut t in &mut status_q {
+    for (mut t, a11y) in &mut status_q {
         **t = tennis.status_ro.clone();
+        if let Some(mut node) = a11y {
+            // Keep the live-region flags even if something else rewrote the node.
+            node.set_role(Role::Status);
+            node.set_live(Live::Polite);
+            node.set_live_atomic();
+            set_node_value(&mut node, &tennis.status_ro);
+        }
     }
     let shot_line = format!(
         "Direcție: {} • Lovitură: {}",
         babilon_core::dir_label_ro(tennis.m.dir),
         tennis.m.shot.label_ro()
     );
-    for mut t in &mut shot_q {
+    for (mut t, a11y) in &mut shot_q {
         **t = shot_line.clone();
+        if let Some(mut node) = a11y {
+            set_node_value(&mut node, &shot_line);
+        }
     }
     let phase_line = if tennis.paused {
         "PAUZĂ".to_string()
     } else {
         tennis.m.phase.visual_label_ro().to_string()
     };
-    for mut t in &mut phase_q {
+    for (mut t, a11y) in &mut phase_q {
         **t = phase_line.clone();
+        if let Some(mut node) = a11y {
+            set_node_value(&mut node, &phase_line);
+        }
     }
     let diff_label = match tennis.difficulty {
         Difficulty::Easy => "Ușor",
@@ -1472,8 +1615,11 @@ fn refresh_ui(
         (vols.crowd * 100.0) as u32,
         if swapped { "invers" } else { "normal" }
     );
-    for mut t in &mut mode_q {
+    for (mut t, a11y) in &mut mode_q {
         **t = mode_line.clone();
+        if let Some(mut node) = a11y {
+            set_node_value(&mut node, &mode_line);
+        }
     }
 }
 
@@ -1528,11 +1674,22 @@ mod smoke {
             gold: Handle::default(),
             pale: Handle::default(),
         });
+        // Focus plumbing (mirrors the real app: InputDispatchPlugin would
+        // init these; headless we add the pieces the new systems need).
+        app.init_resource::<InputFocus>();
+        app.add_event::<A11yActionRequest>();
+        let status_e = app
+            .world_mut()
+            .spawn((StatusText, live_a11y_node("test")))
+            .id();
+        app.insert_resource(InfoPanel { status: status_e });
         app.add_systems(
             Update,
             (
                 keyboard,
                 settings_keys,
+                info_focus_keys,
+                a11y_focus_requests,
                 drift_paddles,
                 ball_flight,
                 particle_fx,
@@ -1571,6 +1728,8 @@ mod smoke {
     fn systems_boot_without_query_conflict() {
         bevy::ecs::system::assert_is_system(keyboard);
         bevy::ecs::system::assert_is_system(settings_keys);
+        bevy::ecs::system::assert_is_system(info_focus_keys);
+        bevy::ecs::system::assert_is_system(a11y_focus_requests);
         bevy::ecs::system::assert_is_system(drift_paddles);
         bevy::ecs::system::assert_is_system(ball_flight);
         bevy::ecs::system::assert_is_system(particle_fx);
@@ -1692,6 +1851,18 @@ mod smoke {
         let mut app = test_app();
         press(&mut app, KeyCode::KeyD);
         assert!(app.world().resource::<Tennis>().m.phase == Phase::Ready);
+    }
+
+    #[test]
+    fn info_keys_move_screen_reader_focus() {
+        // I focuses the live status line for JAWS/NVDA; Esc returns to game.
+        let mut app = test_app();
+        assert!(app.world().resource::<InputFocus>().get().is_none());
+        let status = app.world().resource::<InfoPanel>().status;
+        press(&mut app, KeyCode::KeyI);
+        assert_eq!(app.world().resource::<InputFocus>().get(), Some(status));
+        press(&mut app, KeyCode::Escape);
+        assert!(app.world().resource::<InputFocus>().get().is_none());
     }
 
     #[test]
