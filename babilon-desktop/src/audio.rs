@@ -472,6 +472,7 @@ fn open_output(
     clips: &HashMap<String, SamplesBuffer<i16>>,
 ) -> Option<(OutputStream, OutputStreamHandle, Sink)> {
     // Always the OS default device (no in-game switching).
+    eprintln!("[AUDIO] opening default output...");
     let (stream, handle) = match OutputStream::try_default() {
         Ok(x) => x,
         Err(e) => {
@@ -479,16 +480,18 @@ fn open_output(
             return None;
         }
     };
+    eprintln!("[AUDIO] stream open, creating ambient sink...");
     let ambient = Sink::try_new(&handle).ok()?;
     ambient.set_volume(ambient_gain(crowd));
     if let Some(buf) = clips.get("ambient") {
         ambient.append(buf.clone().repeat_infinite());
     }
-    eprintln!("[AUDIO] output: default");
+    eprintln!("[AUDIO] output: default (ambient looping)");
     Some((stream, handle, ambient))
 }
 
 fn audio_thread(rx: std::sync::mpsc::Receiver<Cmd>, crowd: f32) {
+    eprintln!("[AUDIO] audio thread started");
     let dir = asset_dirs().into_iter().find(|d| d.is_dir());
     let mut clips = HashMap::new();
     if let Some(dir) = dir {
@@ -502,8 +505,10 @@ fn audio_thread(rx: std::sync::mpsc::Receiver<Cmd>, crowd: f32) {
     } else {
         eprintln!("[AUDIO] sound folder not found (looked for babilon-desktop/assets/sunete and assets/sunete)");
     }
+    eprintln!("[AUDIO] decoded {} clips", clips.len());
     eprintln!("[AUDIO] devices: {:?}", list_output_devices());
     let audio = open_output(crowd, &clips);
+    eprintln!("[AUDIO] entering command loop");
     for cmd in rx {
         match cmd {
             Cmd::Synth { kind, pan, vol } => {

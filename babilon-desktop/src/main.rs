@@ -369,6 +369,7 @@ fn main() {
     let sfx = Sfx::start(vols.crowd);
     sfx.set_swapped(saved.swap_stereo);
     app.insert_resource(sfx);
+    eprintln!("[APP] starting Bevy loop");
     app.run();
 }
 
