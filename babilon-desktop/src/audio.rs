@@ -10,7 +10,7 @@ use bevy::prelude::{Res, ResMut, Resource, Time};
 use rodio::buffer::SamplesBuffer;
 use rodio::cpal::traits::{DeviceTrait, HostTrait};
 use rodio::source::Source;
-use rodio::{Decoder, OutputStream, OutputStreamHandle, Sink};
+use rodio::{Decoder, OutputStream, OutputStreamHandle, Sample, Sink};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
@@ -71,7 +71,8 @@ impl Iterator for Tone {
         self.phase += 2.0 * std::f32::consts::PI * f / RATE as f32;
         let g = self.edge_gain();
         self.pos += 1;
-        Some((self.phase.sin()) * 0.5 * g)
+        // Full-scale oscillator like the web's; recipe amps set the mix.
+        Some(self.phase.sin() * g)
     }
 }
 
@@ -118,7 +119,9 @@ impl Burst {
         let al = (2.0 * std::f32::consts::PI * self.cutoff_lo * dt).min(1.0);
         self.lp_hi += ah * (w - self.lp_hi);
         self.lp_lo += al * (w - self.lp_lo);
-        (self.lp_hi - self.lp_lo) * 2.0
+        // Band-passed noise roughly in [-1, 1] like the web's biquad —
+        // no extra boost (it clipped harshly before).
+        self.lp_hi - self.lp_lo
     }
     fn edge_gain(&self) -> f32 {
         let mut g = 1.0;
@@ -361,11 +364,20 @@ fn faded_clip(buf: &SamplesBuffer<i16>, fade_n: u64) -> SamplesBuffer<i16> {
     SamplesBuffer::new(1, rate, raw)
 }
 
-fn sink_for(handle: &OutputStreamHandle, vol: f32) -> Option<Sink> {
-    Sink::try_new(handle).ok().map(|s| {
-        s.set_volume(vol.clamp(0.0, 2.0));
-        s
-    })
+fn sink_for(handle: &OutputStreamHandle) -> Option<Sink> {
+    // Volume lives in the sample stream (see `with_vol`), not the sink —
+    // so it is unit-testable and independent of backend quirks. Sinks stay
+    // at their default gain of 1.0.
+    Sink::try_new(handle).ok()
+}
+
+/// Apply the group volume inside the DSP chain (sample-exact, testable).
+fn with_vol<S>(src: S, vol: f32) -> rodio::source::Amplify<S>
+where
+    S: Source,
+    S::Item: Sample,
+{
+    src.amplify(vol.clamp(0.0, 2.0))
 }
 
 /// Constant-power stereo gains. pan < 0 is LEFT, pan > 0 is RIGHT —
@@ -431,17 +443,17 @@ where
 }
 
 fn play_synth(handle: &OutputStreamHandle, kind: Synth, pan: f32, vol: f32) {
-    let Some(sink) = sink_for(handle, vol) else { return };
+    let Some(sink) = sink_for(handle) else { return };
     let src: Box<dyn Source<Item = f32> + Send> = match kind {
-        Synth::Guide => Box::new(Pan::new(tone(475.0, 580.0, 0.16, 0.16), pan)),
-        Synth::Cue => Box::new(Pan::new(tone(900.0, 740.0, 0.21, 0.26), pan)),
-        Synth::Hit => Box::new(Pan::new(hit_src(), pan)),
-        Synth::Bounce => Box::new(Pan::new(bounce_src(), pan)),
-        Synth::Good => Box::new(Pan::new(tone(760.0, 900.0, 0.23, 0.17), pan)),
-        Synth::Bad => Box::new(Pan::new(tone(230.0, 150.0, 0.22, 0.15), pan)),
+        Synth::Guide => Box::new(Pan::new(with_vol(tone(475.0, 580.0, 0.16, 0.16), vol), pan)),
+        Synth::Cue => Box::new(Pan::new(with_vol(tone(900.0, 740.0, 0.21, 0.26), vol), pan)),
+        Synth::Hit => Box::new(Pan::new(with_vol(hit_src(), vol), pan)),
+        Synth::Bounce => Box::new(Pan::new(with_vol(bounce_src(), vol), pan)),
+        Synth::Good => Box::new(Pan::new(with_vol(tone(760.0, 900.0, 0.23, 0.17), vol), pan)),
+        Synth::Bad => Box::new(Pan::new(with_vol(tone(230.0, 150.0, 0.22, 0.15), vol), pan)),
         Synth::Lane(d) => {
             let f = lane_freq(d);
-            Box::new(Pan::new(tone(f, f, 0.09, 0.14), pan))
+            Box::new(Pan::new(with_vol(tone(f, f, 0.09, 0.14), vol), pan))
         }
     };
     sink.append(src);
@@ -494,9 +506,9 @@ fn audio_thread(rx: std::sync::mpsc::Receiver<Cmd>, crowd: f32) {
             }
             Cmd::Clip { key, pan, vol } => {
                 if let (Some(buf), Some((_, handle, _))) = (clips.get(&key), &audio) {
-                    if let Some(sink) = sink_for(handle, vol) {
+                    if let Some(sink) = sink_for(handle) {
                         sink.append(Box::new(Pan::new(
-                            faded_clip(buf, fade_n()).convert_samples::<f32>(),
+                            with_vol(faded_clip(buf, fade_n()).convert_samples::<f32>(), vol),
                             pan,
                         )) as Box<dyn Source<Item = f32> + Send>);
                         sink.detach();
@@ -671,6 +683,22 @@ mod tests {
         }
         assert_eq!(lane_freq(-9), lane_freq(-2));
         assert_eq!(lane_freq(9), lane_freq(2));
+    }
+
+    #[test]
+    fn volume_scales_output_amplitude() {
+        // The Z/X keys must change loudness, not just a number on screen.
+        let peak = |vol: f32| {
+            with_vol(tone(440.0, 440.0, 0.2, 0.5), vol)
+                .take(2000)
+                .map(|s: f32| s.abs())
+                .fold(0.0f32, f32::max)
+        };
+        let full = peak(1.0);
+        assert!(full > 0.2, "inaudible at full volume: {full}");
+        let half = peak(0.5);
+        assert!((half / full - 0.5).abs() < 0.05, "{half} vs {full}");
+        assert_eq!(peak(0.0), 0.0);
     }
 
     #[test]
