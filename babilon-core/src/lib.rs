@@ -444,6 +444,25 @@ impl Match {
         }
     }
 
+    /// Contact quality from paddle-to-ball distance (px) at swing time.
+    /// Same bands as `hit_quality`: set on the ball = perfect, a lane
+    /// away = good, lunging = poor, over 120px = whiff territory
+    /// (the caller awards the point instead of swinging at air).
+    pub fn position_quality(dx: f32) -> f32 {
+        if dx < 25.0 {
+            1.0
+        } else if dx < 60.0 {
+            0.87
+        } else if dx < 120.0 {
+            0.66
+        } else {
+            0.44
+        }
+    }
+
+    /// Whiff line: farther than this from the ball and the swing hits air.
+    pub const WHIFF_DISTANCE: f32 = 120.0;
+
     /// Chance the return goes OUT. Mirrors `outChance` in `hit()`.
     pub fn out_chance(quality: f32, shot: Shot) -> f32 {
         0.035 + (1.0 - quality) * 0.26 + if shot == Shot::Flat { 0.025 } else { 0.0 }
@@ -513,12 +532,11 @@ impl RallyOutcome {
         dir: Dir,
         incoming_side: Dir,
         shot: Shot,
-        elapsed_ms: f32,
+        quality: f32,
         roll_out: f32,
         roll_win: f32,
         roll_counter: f32,
     ) -> Self {
-        let quality = Match::hit_quality(elapsed_ms);
         if roll_out < Match::out_chance(quality, shot) {
             return RallyOutcome::Out;
         }
@@ -707,19 +725,32 @@ mod tests {
     fn rally_out_winner_counter_continue() {
         // Forced OUT: roll_out below out_chance.
         assert_eq!(
-            RallyOutcome::resolve(Difficulty::Normal, 0, 0, Shot::Flat, 100.0, 0.0, 0.99, 0.99),
+            RallyOutcome::resolve(Difficulty::Normal, 0, 0, Shot::Flat, 1.0, 0.0, 0.99, 0.99),
             RallyOutcome::Out
         );
-        // Winner: good timing, aligned, topspin bonus.
+        // Winner: perfect contact, aligned, topspin bonus.
         assert_eq!(
-            RallyOutcome::resolve(Difficulty::Easy, 1, 1, Shot::Topspin, 100.0, 0.99, 0.0, 0.99),
+            RallyOutcome::resolve(Difficulty::Easy, 1, 1, Shot::Topspin, 1.0, 0.99, 0.0, 0.99),
             RallyOutcome::Winner
         );
-        // Countered: bad timing on hard difficulty.
+        // Countered: poor contact on hard difficulty.
         assert_eq!(
-            RallyOutcome::resolve(Difficulty::Hard, 0, 0, Shot::Flat, 1300.0, 0.99, 0.99, 0.0),
+            RallyOutcome::resolve(Difficulty::Hard, 0, 0, Shot::Flat, 0.44, 0.99, 0.99, 0.0),
             RallyOutcome::Countered
         );
+    }
+
+    #[test]
+    fn position_quality_matches_hit_bands() {
+        assert_eq!(Match::position_quality(0.0), 1.0);
+        assert_eq!(Match::position_quality(24.9), 1.0);
+        assert_eq!(Match::position_quality(25.0), 0.87);
+        assert_eq!(Match::position_quality(59.9), 0.87);
+        assert_eq!(Match::position_quality(60.0), 0.66);
+        assert_eq!(Match::position_quality(119.9), 0.66);
+        assert_eq!(Match::position_quality(120.0), 0.44);
+        assert_eq!(Match::position_quality(500.0), 0.44);
+        assert!(Match::WHIFF_DISTANCE > 0.0);
     }
 
     #[test]

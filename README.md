@@ -35,13 +35,26 @@ Needs a display + audio (desktop). First keypress unlocks audio, same as web.
 > `bevy_gilrs`) + `mp3` support, so it builds without sudo. If you install
 > `libudev-dev`, you can switch back to `bevy = "0.16"` with defaults.
 
+## How a rally plays
+
+- Serve with `S` from wherever you stand; the ball starts at your paddle.
+- The bot announces its lane ("Mingea vine spre …") and answers the side
+  you're on — camp in one lane and it wrong-foots you to the far corner.
+- Answer only after the ball crosses the net ("Prea devreme" otherwise),
+  and **be where it lands**: contact quality comes from paddle-to-ball
+  distance, capped by reaction time after the "Acum lovește!" cue.
+  Swinging from over 120px away whiffs outright ("Erai prea departe").
+- `O` tells you where the opponent is at any moment (lower octave blip,
+  never confused with your own lane blip).
+
 ## UI layout
 
 - 1160×800 window: the court stays centered-left, and all text lives in a
   dark side panel docked right (268px) — nothing is drawn over the game.
 - Panel (top→bottom): title, scoreboard, status/announcement, shot,
-  phase, mode/difficulty/volumes line, key help. World-space labels
-  (BABILON OPEN, TU, ADVERSAR) remain on the court.
+  phase, mode/difficulty/volumes line, key help. The only world-space
+  text is the BABILON OPEN banner — no labels over the court, athletes
+  stay readable by color (galben = tu, roșu = adversar) and sound.
 - Typeface: bundled Inter Regular + Bold (`assets/fonts/`, OFL) with full
   ș/ț/ă/â/î coverage verified via fontconfig — identical rendering on
   Linux / Windows / macOS / mobile, no system-font roulette.

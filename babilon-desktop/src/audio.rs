@@ -199,6 +199,9 @@ pub enum Synth {
     /// Position blip when YOU move: pitch + pan both encode the lane, so it
     /// reads even on one working ear / one speaker.
     Lane(i8),
+    /// Opponent locator (O key): same lane coding one octave lower plus a
+    /// longer tail, so you can never confuse it with your own blip.
+    Foe(i8),
 }
 
 /// Lane pitch, ascending left to right (Eb4 F4 G4 A4 B4): your ears get
@@ -454,6 +457,10 @@ fn play_synth(handle: &OutputStreamHandle, kind: Synth, pan: f32, vol: f32) {
         Synth::Lane(d) => {
             let f = lane_freq(d);
             Box::new(Pan::new(with_vol(tone(f, f, 0.09, 0.14), vol), pan))
+        }
+        Synth::Foe(d) => {
+            let f = lane_freq(d) / 2.0;
+            Box::new(Pan::new(with_vol(tone(f, f, 0.12, 0.14), vol), pan))
         }
     };
     sink.append(src);

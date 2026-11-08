@@ -50,8 +50,8 @@ struct Flight {
     bounce_at: Option<f32>,
     bounced: bool,
     after: FlightAfter,
-    /// Seconds between the HIT cue and Space press (for rally quality).
-    hit_elapsed_s: f32,
+    /// Contact quality of the swing that started this flight (0.44..1.0).
+    hit_quality: f32,
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
@@ -83,8 +83,6 @@ struct ShotText;
 struct PhaseText;
 #[derive(Component)]
 struct ModeText;
-#[derive(Component)]
-struct AimMarker;
 
 /// Y of the net visual (see `setup`: net sprite at y=20). A return swing is
 /// only legal once the ball is past it, on your side.
@@ -231,14 +229,11 @@ fn circ_part(
 }
 
 /// Composite athlete: shadow, striding legs, shoes, shirt, arms, head with
-/// cap, a strung racket on a rotating mount (idle / swing / serve), and a
-/// name tag floating above the head that travels with the athlete.
+/// cap, and a strung racket on a rotating mount (idle / swing / serve).
 fn spawn_athlete(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     mats: &mut Assets<ColorMaterial>,
-    font: Handle<Font>,
-    name: &'static str,
     x: f32,
     y: f32,
     shirt: Color,
@@ -280,15 +275,6 @@ fn spawn_athlete(
         // head + hair + cap
         circ_part(p, meshes, mats, 15., skin, 0., 28., 0.5);
         rect_part(p, meshes, mats, 32., 9., white, 0., 38., 0.6);
-        // name tag on a dark pill, pinned above the head so it travels
-        // with the athlete instead of colliding with it
-        rect_part(p, meshes, mats, 104., 22., Color::srgba(0.02, 0.08, 0.14, 0.92), 0., 56., 0.6);
-        p.spawn((
-            Text2d::new(name),
-            TextFont { font, font_size: 14.0, ..default() },
-            TextColor(Color::srgb(0.9, 1.0, 0.94)),
-            Transform::from_xyz(0., 56., 0.7),
-        ));
         // racket mount (rotated by the animate system)
         let mut mount = p.spawn((
             Transform::from_xyz(32., 4., 0.7).with_rotation(Quat::from_rotation_z(0.42)),
@@ -513,8 +499,6 @@ fn setup(
         &mut commands,
         &mut meshes,
         &mut materials,
-        fonts.bold.clone(),
-        "TU",
         0.,
         -280.,
         Color::srgb(0.96, 0.79, 0.42),
@@ -525,8 +509,6 @@ fn setup(
         &mut commands,
         &mut meshes,
         &mut materials,
-        fonts.bold.clone(),
-        "ADVERSAR",
         0.,
         320.,
         Color::srgb(1.0, 0.43, 0.41),
@@ -561,16 +543,6 @@ fn setup(
         Mesh2d(meshes.add(Ellipse::new(16.0, 7.0))),
         MeshMaterial2d(materials.add(ColorMaterial::from(Color::srgb(0.0, 0.15, 0.18)))),
         Transform::from_xyz(0., -260., 2.5),
-    ));
-    // Aim marker: shows where ←/→ currently points (serve/return target).
-    commands.spawn((
-        AimMarker,
-        Sprite {
-            color: Color::srgb(0.98, 0.80, 0.40),
-            custom_size: Some(Vec2::new(30., 10.)),
-            ..default()
-        },
-        Transform::from_xyz(0., -225., 3.),
     ));
     // Shared spark assets.
     commands.insert_resource(ParticleAssets {
@@ -838,7 +810,7 @@ fn land_return(
     transforms: &mut Query<&mut Transform>,
     pa: &ParticleAssets,
     particles: &mut Particles,
-    elapsed: f32,
+    quality: f32,
 ) {
     let mut rng = rand::thread_rng();
     let outcome = RallyOutcome::resolve(
@@ -846,7 +818,7 @@ fn land_return(
         tennis.m.dir,
         tennis.m.incoming_side,
         tennis.m.shot,
-        elapsed * 1000.0,
+        quality,
         rng.gen(),
         rng.gen(),
         rng.gen(),
@@ -902,15 +874,24 @@ fn do_hit(
     if tennis.paused {
         return;
     }
+    // Whiff check first: swinging at air is not a hit, no matter when.
+    // dx is measured against the ball's live position — positioning is
+    // the skill, not mashing Space.
+    let dx = match (transforms.get(ball), transforms.get(player)) {
+        (Ok(b), Ok(p)) => (b.translation.x - p.translation.x).abs(),
+        _ => f32::INFINITY,
+    };
     // Net rule: Space during Incoming swings only once the ball crossed
     // the net onto your side; sooner presses get a clear "too early".
-    // Quality scales with ball closeness + lane position, so meeting it
-    // in position right after the crossing is the best play.
-    let mut elapsed = match tennis.m.phase {
-        Phase::Hit => match &tennis.hit_window {
-            Some(t) => t.elapsed_secs(),
-            None => 0.5,
-        },
+    let mut quality = match tennis.m.phase {
+        Phase::Hit => {
+            let timed = match &tennis.hit_window {
+                Some(t) => Match::hit_quality(t.elapsed_secs() * 1000.0),
+                None => 0.5,
+            };
+            // Fast hands help, but lunging caps what the racket can do.
+            timed.min(Match::position_quality(dx))
+        }
         Phase::Incoming => {
             if !(flight.active
                 && flight.after == FlightAfter::IncomingLanded
@@ -919,8 +900,6 @@ fn do_hit(
                 tennis.announce("Mingea e în aer. Așteaptă.".into());
                 return;
             }
-            // Net rule: you may only answer once the ball crossed the net
-            // onto your side. Anything sooner is "too early", not a swing.
             let crossed = transforms
                 .get(ball)
                 .map(|b| b.translation.y <= NET_Y + 10.0)
@@ -929,8 +908,8 @@ fn do_hit(
                 tennis.announce("Prea devreme — mingea n-a trecut încă fileul.".into());
                 return;
             }
-            let p = (flight.t / flight.duration).clamp(0.0, 1.0);
-            (1.0 - p) * 1.0
+            // Pre-cue, meeting the ball IS the skill: only position counts.
+            Match::position_quality(dx)
         }
         Phase::Ready => {
             tennis.announce("Apasă S pentru serviciu, apoi Spațiu la semnal.".into());
@@ -945,15 +924,17 @@ fn do_hit(
             return;
         }
     };
-    // Position bonus: being in front of the ball forgives slow timing.
-    // dx < 25px forces perfect quality, dx < 60px forces good quality.
-    if let (Ok(b), Ok(p)) = (transforms.get(ball), transforms.get(player)) {
-        let dx = (b.translation.x - p.translation.x).abs();
-        if dx < 25.0 {
-            elapsed = elapsed.min(0.2);
-        } else if dx < 60.0 {
-            elapsed = elapsed.min(0.6);
-        }
+    if dx > babilon_core::Match::WHIFF_DISTANCE {
+        // Swing and a miss: the ball goes through, point to the opponent.
+        tennis.hit_window = None;
+        let r = tennis.m.score_point(1, "Ai ratat mingea");
+        let msg = r.message_ro.clone();
+        tennis.announce(format!("{msg} Erai prea departe de minge."));
+        umpire_call(sfx, vols, &r.umpire);
+        Sfx::synth(sfx, Synth::Bad, 0.0, vols.ball);
+        flight.active = false;
+        reset_ball_to_player(transforms, ball, &targets);
+        return;
     }
     tennis.hit_window = None;
     tennis.m.phase = Phase::Return;
@@ -979,8 +960,8 @@ fn do_hit(
             Some(0.61),
         );
     }
-    // stash elapsed in flight resource for landing; used for rally quality
-    flight.hit_elapsed_s = elapsed;
+    // stash contact quality in flight resource for the rally resolution
+    flight.hit_quality = quality;
 }
 
 // ---- systems ---------------------------------------------------------------
@@ -999,12 +980,27 @@ fn keyboard(
     mut flight: ResMut<Flight>,
     balls: Query<Entity, With<Ball>>,
     players: Query<Entity, With<PlayerPaddle>>,
+    opps: Query<Entity, With<OpponentPaddle>>,
     mut transforms: Query<&mut Transform>,
 ) {
     let sfx = sfx.as_deref();
     if keys.just_pressed(KeyCode::KeyR) {
         let msg = format!("{} {}", tennis.m.history_ro, tennis.m.score_text_ro());
         tennis.announce(msg);
+        return;
+    }
+    if keys.just_pressed(KeyCode::KeyO) {
+        // Opponent locator: lower-octave lane blip panned at his feet,
+        // plus the lane name — impossible to confuse with your own blip.
+        let lane = opps
+            .single()
+            .ok()
+            .and_then(|e| transforms.get(e).ok())
+            .map(|t| (t.translation.x / LANE_STEP).round() as i8)
+            .unwrap_or(0)
+            .clamp(-MAX_DIR, MAX_DIR);
+        Sfx::synth(sfx, Synth::Foe(lane), lane as f32 / MAX_DIR as f32, vols.ball);
+        tennis.announce(format!("Adversar: {}.", babilon_core::dir_label_ro(lane)));
         return;
     }
     if keys.just_pressed(KeyCode::KeyP) {
@@ -1175,35 +1171,46 @@ fn settings_keys(
 /// marker visibly in Ready phase too.
 #[allow(clippy::too_many_arguments)]
 fn drift_paddles(
+    time: Res<Time>,
     tennis: Res<Tennis>,
     targets: Res<Targets>,
     flight: Res<Flight>,
     balls: Query<Entity, With<Ball>>,
     players: Query<Entity, With<PlayerPaddle>>,
     opps: Query<Entity, With<OpponentPaddle>>,
-    aims: Query<Entity, With<AimMarker>>,
     mut transforms: Query<&mut Transform>,
 ) {
     if tennis.paused {
         return;
     }
+    // Frame-rate independent approach (same feel at 30 or 144 fps).
+    let dt = time.delta_secs().max(0.0);
+    let player_k = 1.0 - (-dt * 7.0).exp();
+    let opp_k = 1.0 - (-dt * 10.0).exp();
     let ball = balls.single().ok();
     let player = players.single().ok();
     let opp = opps.single().ok();
-    let aim = aims.single().ok();
     if let Some(e) = player {
         if let Ok(mut p) = transforms.get_mut(e) {
-            p.translation.x += (targets.player_x - p.translation.x) * 0.12;
+            p.translation.x += (targets.player_x - p.translation.x) * player_k;
+        }
+    }
+    // The opponent shadows the LIVE ball on his half and runs to meet it,
+    // so his racket is at the ball when he "hits" — no more teleporting
+    // to a stale target after the flight already started.
+    let mut opp_target = targets.opp_x;
+    if flight.active {
+        if let Some(e) = ball {
+            if let Ok(b) = transforms.get(e) {
+                if b.translation.y > NET_Y {
+                    opp_target = b.translation.x.clamp(-LANE_STEP * 2.0, LANE_STEP * 2.0);
+                }
+            }
         }
     }
     if let Some(e) = opp {
         if let Ok(mut o) = transforms.get_mut(e) {
-            o.translation.x += (targets.opp_x - o.translation.x) * 0.10;
-        }
-    }
-    if let Some(e) = aim {
-        if let Ok(mut a) = transforms.get_mut(e) {
-            a.translation.x = tennis.m.dir as f32 * LANE_STEP;
+            o.translation.x += (opp_target - o.translation.x) * opp_k;
         }
     }
     // Serve ball parked on your paddle: ←/→ in Ready phase moves the
@@ -1279,7 +1286,7 @@ fn ball_flight(
 
     if t >= 1.0 {
         let after = flight.after;
-        let hit_elapsed = flight.hit_elapsed_s;
+        let hit_quality = flight.hit_quality;
         let now = time.elapsed_secs();
         flight.active = false;
         if let Some(b) = ball {
@@ -1287,7 +1294,7 @@ fn ball_flight(
                 FlightAfter::ServeLanded => land_serve(&mut commands, sfx, &vols, *mode, &mut pending, &mut tennis, &mut targets, &mut poses, now, &mut flight, b, &mut transforms, &pa, &mut particles),
                 FlightAfter::IncomingLanded => land_incoming(sfx, &vols, *mode, &mut tennis),
                 FlightAfter::ReturnLanded => {
-                    land_return(&mut commands, sfx, &vols, *mode, &mut pending, &mut tennis, &mut targets, &mut poses, now, &mut flight, b, &mut transforms, &pa, &mut particles, hit_elapsed);
+                    land_return(&mut commands, sfx, &vols, *mode, &mut pending, &mut tennis, &mut targets, &mut poses, now, &mut flight, b, &mut transforms, &pa, &mut particles, hit_quality);
                 }
                 FlightAfter::None => {}
             }
@@ -1537,7 +1544,6 @@ mod smoke {
                 .chain(),
         );
         app.world_mut().spawn((Ball, Transform::from_xyz(0., -260., 3.)));
-        app.world_mut().spawn((AimMarker, Transform::default()));
         let player = rig_entities(&mut app, 0., -280.);
         let opp = rig_entities(&mut app, 0., 320.);
         // link rig roots to the paddle markers the systems drive
@@ -1594,6 +1600,34 @@ mod smoke {
     }
 
     #[test]
+    fn far_from_ball_swings_at_air() {
+        // Swinging from >120px away is a whiff: point to the opponent,
+        // no phantom contact no matter how well timed the press is.
+        let mut app = test_app();
+        press(&mut app, KeyCode::KeyS);
+        app.world_mut().resource_mut::<Flight>().t = 100.0;
+        app.update();
+        if app.world().resource::<Tennis>().m.phase == Phase::Ready {
+            assert_eq!(app.world().resource::<Tennis>().m.pts[0], 1);
+            return; // serve ace (8%), nothing to whiff at
+        }
+        app.world_mut().resource_mut::<Flight>().t = 100.0;
+        app.update();
+        assert_eq!(app.world().resource::<Tennis>().m.phase, Phase::Hit);
+        // park the paddle 200px from where the ball landed: unwinnable
+        // position, regardless of timing
+        let landing_x = app.world().resource::<Flight>().to.x;
+        let paddle = app.world().resource::<Rigs>().player.root;
+        app.world_mut().get_mut::<Transform>(paddle).unwrap().translation.x = landing_x + 200.0;
+        press(&mut app, KeyCode::Space);
+        let t = app.world().resource::<Tennis>();
+        assert_eq!(t.m.phase, Phase::Ready, "whiff ends the point, no return flight");
+        assert_eq!(t.m.pts, [0, 1]);
+        assert!(t.status_ro.contains("departe"));
+        assert!(t.hit_window.is_none());
+    }
+
+    #[test]
     fn early_space_swings_instead_of_scolding() {
         // Space once the ball crossed the net (even before the HIT cue)
         // starts the return — never "too early", never a silent timeout.
@@ -1612,12 +1646,18 @@ mod smoke {
         press(&mut app, KeyCode::Space);
         assert_eq!(app.world().resource::<Tennis>().m.phase, Phase::Incoming);
         assert!(app.world().resource::<Tennis>().status_ro.contains("fileul"));
-        // ball past the net (progress 0.7, y well below NET_Y) -> swing fires
+        // ball past the net (progress 0.7, y well below NET_Y): step to
+        // where it will land, then the swing fires
         {
             let dur = app.world().resource::<Flight>().duration;
             app.world_mut().resource_mut::<Flight>().t = 0.7 * dur;
         }
         app.update();
+        {
+            let landing_x = app.world().resource::<Flight>().to.x;
+            let paddle = app.world().resource::<Rigs>().player.root;
+            app.world_mut().get_mut::<Transform>(paddle).unwrap().translation.x = landing_x;
+        }
         press(&mut app, KeyCode::Space);
         assert_eq!(app.world().resource::<Tennis>().m.phase, Phase::Return);
     }
@@ -1672,7 +1712,12 @@ mod smoke {
         app.update();
         assert_eq!(app.world().resource::<Tennis>().m.phase, Phase::Hit);
         assert!(app.world().resource::<Tennis>().hit_window.is_some());
-        // hit on the cue
+        // step to the ball like a player would, then hit on the cue
+        {
+            let landing_x = app.world().resource::<Flight>().to.x;
+            let paddle = app.world().resource::<Rigs>().player.root;
+            app.world_mut().get_mut::<Transform>(paddle).unwrap().translation.x = landing_x;
+        }
         press(&mut app, KeyCode::Space);
         {
             let t = app.world().resource::<Tennis>();
