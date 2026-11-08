@@ -1,7 +1,14 @@
 name: windows-build
 
 on:
+  # Only code/asset changes trigger a build — README-only pushes skip it.
   push:
+    paths:
+      - 'babilon-desktop/**'
+      - 'babilon-core/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/windows.yml'
   workflow_dispatch:
 
 jobs:
@@ -13,6 +20,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # Cache cargo deps + incremental artifacts: first build is full
+      # price (~15-25 min), later builds only recompile what changed.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-build
       - name: Build (Windows exe)
         env:
           # Static CRT: the exe runs on stock Windows 10/11, no VS redist needed.
