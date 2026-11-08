@@ -107,6 +107,32 @@ output as the OS default before starting (on Linux: `pactl list sinks`,
   the headset drops to 8 kHz mono (HSP/HFP) and everything sounds dull —
   that is a Bluetooth limitation, not a game bug.
 
+## Running in a VM (VMware/VirtualBox black screen or crash)
+
+Virtual GPUs (e.g. VMware SVGA3D through old Mesa) often top out at
+OpenGL 4.1, but Bevy builds a compute-shader pipeline at startup
+(compute needs GL 4.3+), so the game dies during init with
+`ComputePipeline ... doesn't support Features(COMPUTE_SHADER ...)`.
+Workarounds, first to last:
+
+```powershell
+# 1. Stay on GL but take Bevy's no-compute path (2D game renders fine):
+$env:WGPU_SETTINGS_PRIO = 'webgl2'
+cargo run -p babilon-desktop
+```
+
+```powershell
+# 2. Try native DirectX 12 instead of GL (needs a DX12-capable guest):
+$env:WGPU_BACKEND = 'dx12'
+cargo run -p babilon-desktop
+```
+
+3. Upgrade the guest: latest VMware Tools / Guest Additions, virtual
+   hardware to the newest version, 3D acceleration ON, graphics memory
+   up (128MB+). Newer SVGA3D exposes DX11/DX12 and newer GL.
+4. If it still fails, paste the last 20 log lines — the line *after* the
+   wgpu error names the real failure.
+
 ## Gaps vs web 0.5 (next steps)
 
 * Real rally-hit MP3 (web currently synthesizes it too — ours is a faithful
