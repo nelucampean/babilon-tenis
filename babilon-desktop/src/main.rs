@@ -723,7 +723,13 @@ fn do_incoming(
     }
     tennis.m.phase = Phase::Incoming;
     let mut rng = rand::thread_rng();
-    let side: i8 = rng.gen_range(-MAX_DIR..=MAX_DIR);
+    let side: i8 = {
+        // The bot reads your position (paddle drift target) and, on higher
+        // difficulties, wrong-foots you toward the far corner. Easy hits
+        // anywhere — it doesn't scout you at all.
+        let player_lane = (targets.player_x / LANE_STEP).round() as i8;
+        Match::pick_incoming_side(tennis.difficulty, player_lane, rng.gen())
+    };
     tennis.m.incoming_side = side;
     targets.opp_x = side as f32 * 50.0;
     poses.o_swing_until = now + 0.35;

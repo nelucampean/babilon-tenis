@@ -84,29 +84,25 @@ Keeps `babilon-core` untouched. New `babilon-mobile` crate (Bevy, same engine):
   curve; applause on your points, 40% crowd reaction on lost ones.
 * Runs on a dedicated audio thread (cpal streams are `!Send`) behind a
   channel — the game never blocks on audio, and headless runs stay silent.
-* Keys: `G` difficulty (Ușor/Normal/Greu), `M` audio mode
+* Keys: `G` difficulty (Ușor/Normal/Greu — harder bots read serves
+  better, eat more of your timing, counter weak balls, and hunt the far
+  corner from where you stand), `M` audio mode
   (accesibil/realist — Realist drops the guide beep, keeps a soft cue),
   `C` volume group (minge/arbitru/public), `Z`/`X` ∓10%, `T` stadium test,
-  `D` output device (Bluetooth headsets etc.).
+  `N` stereo swap.
 
 ## Bluetooth / output devices
 
 `rodio` talks to raw ALSA and opens the OS *default* device — on Linux a
 Bluetooth headset routed through PipeWire/PulseAudio is often *not* the
-ALSA default, so the game plays through the speakers instead.
+ALSA default, so the game plays through the speakers instead. In-game
+device switching was tried and removed: cycling raw `hw:` outputs is
+exclusive-access with no format conversion and segfaulted an HDMI driver
+here (exit 139). If you hear nothing or the wrong speakers, set the right
+output as the OS default before starting (on Linux: `pactl list sinks`,
+`pactl set-default-sink …`, or the desktop sound settings; installing the
+`pipewire-alsa` bridge helps), then restart the game.
 
-* Press `D` in-game to cycle output devices; each switch is announced
-  (`Ieșire audio: … (2/3)`) and the console logs `[AUDIO] output: …` plus
-  the full device list at startup.
-* If no devices appear: on Linux install the PipeWire↔ALSA bridge
-  (`pipewire-alsa`) or check `pactl list sinks`; Windows/macOS expose
-  Bluetooth headsets directly.
-* `D` output device (Bluetooth headsets etc.): cycles only *safe* devices.
-  Raw `hw:` outputs are exclusive-access with no format conversion and
-  segfaulted an HDMI driver here (exit 139) — they are hidden, as are
-  capture-only `dsnoop` and dead OSS entries. The same hardware stays
-  reachable through `hdmi:` / `plughw:` / `dmix:` / `pulse:` / `pipewire`.
-  The old stream is released *before* the new one opens.
 * Tip: keep the headset in music mode (A2DP). If its microphone is active
   the headset drops to 8 kHz mono (HSP/HFP) and everything sounds dull —
   that is a Bluetooth limitation, not a game bug.

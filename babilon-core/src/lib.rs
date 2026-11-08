@@ -71,20 +71,41 @@ pub enum Difficulty {
 }
 
 impl Difficulty {
-    /// Ace chance on serve. Matches `serve()` in index.html.
+    /// Ace chance on serve. Matches `serve()` in index.html; Hard reads
+    /// serves better, so free aces against it are rarer.
     pub fn ace_chance(self) -> f32 {
         match self {
             Difficulty::Easy => 0.13,
             Difficulty::Normal => 0.08,
-            Difficulty::Hard => 0.035,
+            Difficulty::Hard => 0.025,
         }
     }
-    /// Opponent `defense` in `hit()`.
+    /// Opponent `defense` in `hit()`: how much of your timing quality the
+    /// bot eats before a ball becomes a winner.
     pub fn defense(self) -> f32 {
         match self {
             Difficulty::Easy => 0.24,
-            Difficulty::Normal => 0.50,
-            Difficulty::Hard => 0.73,
+            Difficulty::Normal => 0.58,
+            Difficulty::Hard => 0.82,
+        }
+    }
+    /// Counter-attack multiplier in `opponent_counter_chance()`: on Hard the
+    /// bot punishes weak returns much more often.
+    pub fn counter_factor(self) -> f32 {
+        match self {
+            Difficulty::Easy => 0.8,
+            Difficulty::Normal => 1.0,
+            Difficulty::Hard => 1.3,
+        }
+    }
+    /// How hard the bot aims away from you (0 = picks lanes uniformly).
+    /// Easy hits anywhere; Normal prefers the open court; Hard hunts the
+    /// far corner almost every ball.
+    pub fn aim_bias(self) -> f32 {
+        match self {
+            Difficulty::Easy => 0.0,
+            Difficulty::Normal => 0.5,
+            Difficulty::Hard => 1.0,
         }
     }
 }
@@ -442,8 +463,34 @@ impl Match {
     }
 
     /// Chance the opponent wins the rally outright after a non-winner return.
-    pub fn opponent_counter_chance(quality: f32) -> f32 {
-        0.17 + (1.0 - quality) * 0.15
+    /// Scales with difficulty: the Hard bot punishes weak balls far more.
+    pub fn opponent_counter_chance(quality: f32, difficulty: Difficulty) -> f32 {
+        (0.17 + (1.0 - quality) * 0.15) * difficulty.counter_factor()
+    }
+
+    /// Which lane the bot sends the ball to. `player_lane` is where you
+    /// stand (-2..=2); `roll` in [0,1) picks deterministically so tests
+    /// stay reproducible. Easy ignores you, harder bots weight the far
+    /// lanes from your position — you get wrong-footed if you camp.
+    pub fn pick_incoming_side(difficulty: Difficulty, player_lane: Dir, roll: f32) -> Dir {
+        const SIDES: [Dir; 5] = [-2, -1, 0, 1, 2];
+        let bias = difficulty.aim_bias();
+        let mut acc = 0.0;
+        let mut edges = [0.0f32; 5];
+        for (i, side) in SIDES.iter().enumerate() {
+            let dist = side.abs_diff(player_lane).min(4) as f32;
+            acc += 1.0 + bias * dist;
+            edges[i] = acc;
+        }
+        let x = roll.clamp(0.0, 0.999_999) * acc;
+        let mut pick = SIDES[4];
+        for (i, &edge) in edges.iter().enumerate() {
+            if x < edge {
+                pick = SIDES[i];
+                break;
+            }
+        }
+        pick.clamp(-MAX_DIR, MAX_DIR)
     }
 }
 
@@ -479,7 +526,7 @@ impl RallyOutcome {
         if roll_win < Match::winner_chance(quality, difficulty, alignment, shot) {
             return RallyOutcome::Winner;
         }
-        if roll_counter < Match::opponent_counter_chance(quality) {
+        if roll_counter < Match::opponent_counter_chance(quality, difficulty) {
             return RallyOutcome::Countered;
         }
         RallyOutcome::Continue
@@ -531,6 +578,45 @@ mod tests {
             m.nudge_dir(1);
         }
         assert_eq!(m.dir, 2, "nudging past the edge sticks at dreapta");
+    }
+
+    #[test]
+    fn bot_aim_targets_away_from_player() {
+        // Easy: uniform lanes, ignores you. Sides [-2..2], weight 1 each.
+        assert_eq!(Match::pick_incoming_side(Difficulty::Easy, 0, 0.0), -2);
+        assert_eq!(Match::pick_incoming_side(Difficulty::Easy, 0, 0.39), -1);
+        assert_eq!(Match::pick_incoming_side(Difficulty::Easy, 1, 0.99), 2);
+        // Hard, you camp stânga (-2): weights [1,2,3,4,5], total 15.
+        assert_eq!(Match::pick_incoming_side(Difficulty::Hard, -2, 0.0), -2);
+        assert_eq!(Match::pick_incoming_side(Difficulty::Hard, -2, 0.5), 1);
+        assert_eq!(Match::pick_incoming_side(Difficulty::Hard, -2, 0.99), 2);
+        // Hard, you camp dreapta (+2): weights [5,4,3,2,1], total 15 —
+        // mirror image, hunts stânga.
+        assert_eq!(Match::pick_incoming_side(Difficulty::Hard, 2, 0.1), -2);
+        assert_eq!(Match::pick_incoming_side(Difficulty::Hard, 2, 0.5), -1);
+        // Normal, you hold centru (0): weights [2,1.5,1,1.5,2], total 7.
+        assert_eq!(Match::pick_incoming_side(Difficulty::Normal, 0, 0.5), 0);
+        assert_eq!(Match::pick_incoming_side(Difficulty::Normal, 0, 0.99), 2);
+        // Always a legal lane, whatever the roll.
+        for &d in &[Difficulty::Easy, Difficulty::Normal, Difficulty::Hard] {
+            for i in 0..=10 {
+                let s = Match::pick_incoming_side(d, (i % 5) as i8 - 2, i as f32 / 10.0);
+                assert!((-2..=2).contains(&s), "{d:?} lane {s}");
+            }
+        }
+    }
+
+    #[test]
+    fn hard_bot_counters_and_reads_serves_better() {
+        assert_eq!(Difficulty::Hard.counter_factor(), 1.3);
+        assert_eq!(Difficulty::Normal.counter_factor(), 1.0);
+        // Same weak ball: Hard counters ~30% more often than base rate.
+        let base = Match::opponent_counter_chance(0.5, Difficulty::Normal);
+        let hard = Match::opponent_counter_chance(0.5, Difficulty::Hard);
+        assert!((hard / base - 1.3).abs() < 1e-6, "{hard} vs {base}");
+        // Hard gives away almost no free aces.
+        assert!(Match::serve_is_ace(Difficulty::Hard, 0.02));
+        assert!(!Match::serve_is_ace(Difficulty::Hard, 0.03));
     }
 
     #[test]
