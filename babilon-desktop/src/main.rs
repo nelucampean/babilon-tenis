@@ -17,6 +17,7 @@ use rand::Rng;
 
 mod audio;
 use audio::{AudioMode, Pending, Sfx, Synth, VolGroup, Volumes};
+mod settings;
 
 // ---- resources -------------------------------------------------------------
 
@@ -230,11 +231,14 @@ fn circ_part(
 }
 
 /// Composite athlete: shadow, striding legs, shoes, shirt, arms, head with
-/// cap, and a strung racket on a rotating mount (idle / swing / serve).
+/// cap, a strung racket on a rotating mount (idle / swing / serve), and a
+/// name tag floating above the head that travels with the athlete.
 fn spawn_athlete(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     mats: &mut Assets<ColorMaterial>,
+    font: Handle<Font>,
+    name: &'static str,
     x: f32,
     y: f32,
     shirt: Color,
@@ -276,6 +280,15 @@ fn spawn_athlete(
         // head + hair + cap
         circ_part(p, meshes, mats, 15., skin, 0., 28., 0.5);
         rect_part(p, meshes, mats, 32., 9., white, 0., 38., 0.6);
+        // name tag on a dark pill, pinned above the head so it travels
+        // with the athlete instead of colliding with it
+        rect_part(p, meshes, mats, 104., 22., Color::srgba(0.02, 0.08, 0.14, 0.92), 0., 56., 0.6);
+        p.spawn((
+            Text2d::new(name),
+            TextFont { font, font_size: 14.0, ..default() },
+            TextColor(Color::srgb(0.9, 1.0, 0.94)),
+            Transform::from_xyz(0., 56., 0.7),
+        ));
         // racket mount (rotated by the animate system)
         let mut mount = p.spawn((
             Transform::from_xyz(32., 4., 0.7).with_rotation(Quat::from_rotation_z(0.42)),
@@ -308,7 +321,9 @@ fn spawn_athlete(
 // ---- setup -----------------------------------------------------------------
 
 fn main() {
-    let vols = Volumes::default();
+    // Last session's setup (difficulty, audio mode, volumes, stereo swap).
+    let saved = settings::load();
+    let vols = saved.vols;
     let mut app = App::new();
     // Quiet the MP3 demuxer chatter (unsupported GEOB id3 frames, VBR
     // duration estimates) — it prints one line pair per clip otherwise.
@@ -330,7 +345,7 @@ fn main() {
     )
     .insert_resource(Tennis {
         m: Match::new(),
-        difficulty: Difficulty::Normal,
+        difficulty: saved.difficulty,
         paused: false,
         status_ro: "Meci nou. Apasă S pentru serviciu.".into(),
         hit_window: None,
@@ -343,7 +358,7 @@ fn main() {
     .insert_resource(Poses::default())
     .insert_resource(Particles::default())
     .insert_resource(vols)
-    .insert_resource(AudioMode::Access)
+    .insert_resource(saved.mode)
     .insert_resource(Pending::default())
     .add_systems(Startup, setup)
     // chained: keyboard Space and the 1.4s miss-timer race otherwise,
@@ -365,7 +380,9 @@ fn main() {
     );
     // Stadium sound on its own thread (silent without an audio device).
     // Systems take `Option<Res<Sfx>>`; headless tests simply omit it.
-    app.insert_resource(Sfx::start(vols.crowd));
+    let sfx = Sfx::start(vols.crowd);
+    sfx.set_swapped(saved.swap_stereo);
+    app.insert_resource(sfx);
     app.run();
 }
 
@@ -478,7 +495,8 @@ fn setup(
         commands.spawn(mk_line(5., 21., -court_w / 2. - 52., y));
         commands.spawn(mk_line(5., 21., court_w / 2. + 52., y));
     }
-    // Arena banner + labels (world-space text, like the web overlay).
+    // Arena banner (world-space text, like the web overlay). Name tags
+    // live on the athletes themselves so they can never overlap them.
     commands.spawn((
         Text2d::new("B A B I L O N  O P E N"),
         TextFont {
@@ -487,27 +505,7 @@ fn setup(
             ..default()
         },
         TextColor(Color::srgb(0.61, 0.91, 0.86)),
-        Transform::from_xyz(0., 352., 4.),
-    ));
-    commands.spawn((
-        Text2d::new("TU"),
-        TextFont {
-            font: fonts.bold.clone(),
-            font_size: 15.0,
-            ..default()
-        },
-        TextColor(Color::srgb(0.9, 1.0, 0.94)),
-        Transform::from_xyz(-196., -238., 4.),
-    ));
-    commands.spawn((
-        Text2d::new("ADVERSAR"),
-        TextFont {
-            font: fonts.bold.clone(),
-            font_size: 15.0,
-            ..default()
-        },
-        TextColor(Color::srgb(0.9, 1.0, 0.94)),
-        Transform::from_xyz(-178., 284., 4.),
+        Transform::from_xyz(0., 385., 4.),
     ));
 
     // Composite athletes with rackets (see athlete() in index.html).
@@ -515,6 +513,8 @@ fn setup(
         &mut commands,
         &mut meshes,
         &mut materials,
+        fonts.bold.clone(),
+        "TU",
         0.,
         -280.,
         Color::srgb(0.96, 0.79, 0.42),
@@ -525,6 +525,8 @@ fn setup(
         &mut commands,
         &mut meshes,
         &mut materials,
+        fonts.bold.clone(),
+        "ADVERSAR",
         0.,
         320.,
         Color::srgb(1.0, 0.43, 0.41),
@@ -731,7 +733,9 @@ fn do_incoming(
         Match::pick_incoming_side(tennis.difficulty, player_lane, rng.gen())
     };
     tennis.m.incoming_side = side;
-    targets.opp_x = side as f32 * 50.0;
+    // Chase the ball like the web's opponent.target (near the landing
+    // spot, not stranded mid-court): full lane, like the player's run.
+    targets.opp_x = side as f32 * LANE_STEP;
     poses.o_swing_until = now + 0.35;
     tennis.announce(format!("Mingea vine spre {}. Pregătește-te!", dir_label_ro(side)));
     // Mid-flight guide beep, like the web `setTimeout(..., 490)` — Access
@@ -1066,6 +1070,18 @@ fn keyboard(
 /// Housekeeping keys: stadium test, difficulty, audio mode, volume groups,
 /// output device. Split out of `keyboard` — Bevy caps function systems at
 /// 16 parameters, and settings deserve their own system anyway.
+///
+/// Every branch that mutates setup calls [`persist_settings`] so the next
+/// launch resumes where you left off.
+fn persist_settings(tennis: &Tennis, vols: &Volumes, mode: &AudioMode, sfx: Option<&Sfx>) {
+    settings::save(
+        tennis.difficulty,
+        *mode,
+        vols,
+        sfx.map(|s| s.swapped()).unwrap_or(false),
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 fn settings_keys(
     time: Res<Time>,
@@ -1102,6 +1118,7 @@ fn settings_keys(
             Difficulty::Hard => "Greu",
         };
         tennis.announce(format!("Dificultate: {label}."));
+        persist_settings(&tennis, &vols, &mode, sfx);
         return;
     }
     if keys.just_pressed(KeyCode::KeyM) {
@@ -1110,6 +1127,7 @@ fn settings_keys(
             AudioMode::Real => AudioMode::Access,
         };
         tennis.announce(format!("Mod audio {}.", mode.label_ro()));
+        persist_settings(&tennis, &vols, &mode, sfx);
         return;
     }
     if keys.just_pressed(KeyCode::KeyN) {
@@ -1126,6 +1144,7 @@ fn settings_keys(
         } else {
             tennis.announce("Stereo normal (fără motor audio).".into());
         }
+        persist_settings(&tennis, &vols, &mode, sfx);
         return;
     }
     if keys.just_pressed(KeyCode::KeyC) {
@@ -1136,6 +1155,7 @@ fn settings_keys(
             VolGroup::Crowd => vols.crowd,
         };
         tennis.announce(format!("Grup volum: {}. {}%. Z scade, X crește.", vols.group.label_ro(), (v * 100.0) as u32));
+        persist_settings(&tennis, &vols, &mode, sfx);
         return;
     }
     if keys.just_pressed(KeyCode::KeyZ) || keys.just_pressed(KeyCode::KeyX) {
@@ -1145,6 +1165,7 @@ fn settings_keys(
             s.refresh_ambient(vols.crowd);
         }
         tennis.announce(format!("Volum {}: {}%.", group.label_ro(), (v * 100.0) as u32));
+        persist_settings(&tennis, &vols, &mode, sfx);
     }
 }
 

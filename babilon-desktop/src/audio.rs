@@ -215,7 +215,7 @@ pub fn lane_freq(dir: i8) -> f32 {
 
 // ---- volume groups + audio mode --------------------------------------------
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum VolGroup {
     Ball,
     Umpire,
@@ -239,7 +239,7 @@ impl VolGroup {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Resource)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize, Resource)]
 pub struct Volumes {
     pub ball: f32,
     pub umpire: f32,
@@ -266,7 +266,7 @@ impl Volumes {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Resource)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Resource)]
 pub enum AudioMode {
     Access,
     Real,
@@ -351,7 +351,7 @@ fn load_mono(path: &std::path::Path) -> Option<SamplesBuffer<i16>> {
 /// its raw buffer so the loop point stays untouched.
 fn faded_clip(buf: &SamplesBuffer<i16>, fade_n: u64) -> SamplesBuffer<i16> {
     let rate = buf.sample_rate();
-    let mut raw: Vec<i16> = buf.clone().into_iter().collect();
+    let mut raw: Vec<i16> = buf.clone().collect();
     let n = (fade_n as usize).min(raw.len() / 2);
     for (i, s) in raw.iter_mut().enumerate().take(n) {
         let g = i as f32 / n as f32;

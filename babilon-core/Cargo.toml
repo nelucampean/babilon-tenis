@@ -7,3 +7,6 @@ description = "Pure tennis rules + state machine ported from Babilon Tennis 0.5 
 [lib]
 name = "babilon_core"
 path = "src/lib.rs"
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
