@@ -30,13 +30,14 @@ jobs:
           # Static CRT: the exe runs on stock Windows 10/11, no VS redist needed.
           RUSTFLAGS: -C target-feature=+crt-static
         run: cargo build --release -p babilon-desktop
-      - name: Stage package (exe + umpire MP3s)
+      - name: Stage package (exe + assets)
+        # NOTE: this runs in PowerShell — no Unix redirections (no 2>/dev/null)
+        # and no `||` chains here.
         run: |
-          mkdir package
-          cp target/release/babilon-desktop.exe package/BabilonTennis.exe
-          mkdir package/assets
-          cp -r babilon-desktop/assets package/assets
-          cp README.md package/ 2>/dev/null || true
+          New-Item -ItemType Directory -Force package | Out-Null
+          Copy-Item target/release/babilon-desktop.exe package/BabilonTennis.exe
+          Copy-Item babilon-desktop/assets package/assets -Recurse -Force
+          if (Test-Path README.md) { Copy-Item README.md package/ }
       - uses: actions/upload-artifact@v4
         with:
           name: BabilonTennis-windows-x86_64
