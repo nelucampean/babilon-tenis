@@ -972,57 +972,49 @@ fn land_return(
     );
     match outcome.point_winner() {
         Some(w) => {
-            let reason = if outcome == RallyOutcome::Out {
-                "AUT! Mingea ta a ieșit afară"
-            } else if w == 0 {
-                "Punct câștigat"
-            } else {
-                "Contraatac! Adversarul a câștigat punctul"
-            };
-            let r = tennis.m.score_point(w, reason);
-            let msg = r.message_ro.clone();
-            tennis.announce(msg);
-            if reason.contains("AUT") {
-                Sfx::clip(sfx, "out", 0.0, vols.umpire);
-            }
-            umpire_call(sfx, vols, &r.umpire);
             if w == 0 {
+                let r = tennis.m.score_point(0, "Punct câștigat");
+                let msg = r.message_ro.clone();
+                tennis.announce(msg);
+                umpire_call(sfx, vols, &r.umpire);
                 Sfx::clip(sfx, "applause", 0.0, vols.crowd);
                 Sfx::synth(sfx, Synth::Good, 0.0, vols.ball);
                 spawn_sparks(commands, pa, particles, flight.to, true, 7);
                 flight.active = false;
                 reset_ball_to_player(transforms, ball, targets);
-            } else {
-                Sfx::synth(sfx, Synth::Bad, 0.0, vols.ball);
-                if rand::thread_rng().gen::<f32>() < 0.40 {
-                    Sfx::clip(sfx, "reaction", 0.0, vols.crowd);
-                }
-                if r.match_finished {
-                    // No epilogue after match point — park the ball, done.
-                    flight.active = false;
-                    reset_ball_to_player(transforms, ball, targets);
-                } else if outcome == RallyOutcome::Out {
-                    // Show the miss: sail it long/wide into the stands
-                    // instead of dying on the baseline like a winner.
-                    let from = flight.to;
-                    let to = if rand::thread_rng().gen::<f32>() < 0.5 {
-                        Vec2::new(from.x, 392.0)
-                    } else {
-                        let side = if from.x >= 0.0 { 1.0 } else { -1.0 };
-                        Vec2::new(side * 305.0, 262.0)
-                    };
-                    start_flight(flight, from, to, 0.42, FlightAfter::OutLanded, Some(0.75));
-                    // Epilogue in flight: phase Return so Space/S wait for it.
-                    tennis.m.phase = Phase::Return;
+            } else if outcome == RallyOutcome::Out {
+                // Takeoff gets ONLY the line call + flight noise. The score,
+                // umpire and jingles wait for the landing — otherwise the
+                // 90ms Hit drowns under the voice + Bad + crowd starting in
+                // the same frame and the ball is never heard.
+                tennis.announce("AUT! Mingea a ieșit.".into());
+                Sfx::clip(sfx, "out", 0.0, vols.umpire);
+                let from = flight.to;
+                let to = if rand::thread_rng().gen::<f32>() < 0.5 {
+                    Vec2::new(from.x, 392.0)
                 } else {
-                    // Show his reply: the ball comes back at your feet and
-                    // beats you, instead of dying on his side while he wins.
-                    poses.o_swing_until = now + 0.45;
-                    Sfx::synth(sfx, Synth::Hit, (flight.to.x / 160.0).clamp(-1.0, 1.0), vols.ball);
-                    let from = flight.to;
-                    start_flight(flight, from, Vec2::new(targets.player_x, -330.0), 0.65, FlightAfter::CounterLanded, Some(0.55));
-                    tennis.m.phase = Phase::Return;
+                    let side = if from.x >= 0.0 { 1.0 } else { -1.0 };
+                    Vec2::new(side * 305.0, 262.0)
+                };
+                start_flight(flight, from, to, 0.42, FlightAfter::OutLanded, Some(0.75));
+                // Epilogue in flight: phase Return so Space/S wait for it.
+                tennis.m.phase = Phase::Return;
+            } else {
+                // His reply, staged like any incoming ball: warning text,
+                // his racket crack, full-volume Cue, mid-flight guide, then
+                // the bounce — the score call waits for the landing.
+                tennis.announce("Contraatac! Mingea vine spre tine!".into());
+                poses.o_swing_until = now + 0.45;
+                let pan = (flight.to.x / 160.0).clamp(-1.0, 1.0);
+                Sfx::synth(sfx, Synth::Hit, pan, vols.ball);
+                let amp = vols.ball * if mode == AudioMode::Access { 1.0 } else { 0.4 };
+                Sfx::synth(sfx, Synth::Cue, pan, amp);
+                if mode == AudioMode::Access {
+                    pending.0.push(audio::Scheduled { at: now + 0.3, kind: Synth::Guide, pan: 0.0, vol: vols.ball });
                 }
+                let from = flight.to;
+                start_flight(flight, from, Vec2::new(targets.player_x, -330.0), 0.65, FlightAfter::CounterLanded, Some(0.55));
+                tennis.m.phase = Phase::Return;
             }
         }
         None => do_incoming(tennis, targets, poses, now, mode, vols, pending, flight, ball, transforms),
@@ -1526,10 +1518,35 @@ fn ball_flight(
                 FlightAfter::ReturnLanded => {
                     land_return(&mut commands, sfx, &vols, *mode, &mut pending, &mut tennis, &mut targets, &mut poses, now, &mut flight, b, &mut transforms, &pa, &mut particles);
                 }
-                FlightAfter::OutLanded | FlightAfter::CounterLanded => {
-                    // Visual epilogue over (point was scored at takeoff):
-                    // park the ball, rally phase back to serve — unless the
-                    // match just ended, then stay Finished.
+                FlightAfter::OutLanded => {
+                    // Miss confirmed where it lands: score + call now, in
+                    // the quiet window after the flight — not at takeoff
+                    // under the line call.
+                    let r = tennis.m.score_point(1, "AUT! Mingea ta a ieșit afară");
+                    let msg = r.message_ro.clone();
+                    tennis.announce(msg);
+                    umpire_call(sfx, &vols, &r.umpire);
+                    Sfx::synth(sfx, Synth::Bad, 0.0, vols.ball);
+                    if rand::thread_rng().gen::<f32>() < 0.40 {
+                        Sfx::clip(sfx, "reaction", 0.0, vols.crowd);
+                    }
+                    reset_ball_to_player(&mut transforms, b, &targets);
+                    if tennis.m.phase != Phase::Finished {
+                        tennis.m.phase = Phase::Ready;
+                    }
+                }
+                FlightAfter::CounterLanded => {
+                    // His reply beat you: score + call now, in the quiet
+                    // window after the flight — the takeoff stayed clean
+                    // (racket + Cue + guide + bounce) so it could be heard.
+                    let r = tennis.m.score_point(1, "Contraatac! Adversarul a câștigat punctul");
+                    let msg = r.message_ro.clone();
+                    tennis.announce(msg);
+                    umpire_call(sfx, &vols, &r.umpire);
+                    Sfx::synth(sfx, Synth::Bad, 0.0, vols.ball);
+                    if rand::thread_rng().gen::<f32>() < 0.40 {
+                        Sfx::clip(sfx, "reaction", 0.0, vols.crowd);
+                    }
                     reset_ball_to_player(&mut transforms, b, &targets);
                     if tennis.m.phase != Phase::Finished {
                         tennis.m.phase = Phase::Ready;
@@ -2131,11 +2148,12 @@ mod smoke {
     }
 
     #[test]
-    fn epilogue_landings_park_ball_and_ready() {
-        // Out + counter epilogues are visual only (point scored at takeoff):
-        // when they land, the ball parks at the player and the phase
-        // returns to serve — or stays Finished after match point.
-        for after in [FlightAfter::OutLanded, FlightAfter::CounterLanded] {
+    fn epilogue_landings_score_park_and_ready() {
+        // Out + counter epilogues score WHERE THEY LAND (quiet window after
+        // the flight, so the flight stays audible): landing awards the point
+        // to the opponent, parks the ball, and readies the serve — or stays
+        // Finished after match point.
+        for (after, word) in [(FlightAfter::OutLanded, "AUT"), (FlightAfter::CounterLanded, "Contraatac")] {
             let mut app = test_app();
             app.world_mut().resource_mut::<Tennis>().m.phase = Phase::Return;
             {
@@ -2150,7 +2168,10 @@ mod smoke {
             }
             app.update();
             assert!(!app.world().resource::<Flight>().active, "{after:?} still flying");
-            assert_eq!(app.world().resource::<Tennis>().m.phase, Phase::Ready);
+            let t = app.world().resource::<Tennis>();
+            assert_eq!(t.m.pts, [0, 1], "{after:?} point not scored");
+            assert!(t.status_ro.contains(word), "{after:?} call missing: {}", t.status_ro);
+            assert_eq!(t.m.phase, Phase::Ready);
             let (bx, by) = ball_xy(&mut app);
             assert_eq!((bx, by), (0.0, -260.0), "{after:?} ball not parked");
         }
