@@ -80,13 +80,19 @@ impl Default for Flight {
     }
 }
 
-#[derive(Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 enum FlightAfter {
     #[default]
     None,
     ServeLanded,
     IncomingLanded,
     ReturnLanded,
+    /// Visual epilogue: your ball sails long/wide after the OUT call.
+    /// The point was already scored at takeoff; landing just parks the ball.
+    OutLanded,
+    /// Visual epilogue: his counter comes back at your feet and beats you.
+    /// The point was already scored at takeoff; landing just parks the ball.
+    CounterLanded,
 }
 
 // ---- entities --------------------------------------------------------------
@@ -971,7 +977,7 @@ fn land_return(
             } else if w == 0 {
                 "Punct câștigat"
             } else {
-                "Adversarul a câștigat punctul"
+                "Contraatac! Adversarul a câștigat punctul"
             };
             let r = tennis.m.score_point(w, reason);
             let msg = r.message_ro.clone();
@@ -984,14 +990,40 @@ fn land_return(
                 Sfx::clip(sfx, "applause", 0.0, vols.crowd);
                 Sfx::synth(sfx, Synth::Good, 0.0, vols.ball);
                 spawn_sparks(commands, pa, particles, flight.to, true, 7);
+                flight.active = false;
+                reset_ball_to_player(transforms, ball, targets);
             } else {
                 Sfx::synth(sfx, Synth::Bad, 0.0, vols.ball);
                 if rand::thread_rng().gen::<f32>() < 0.40 {
                     Sfx::clip(sfx, "reaction", 0.0, vols.crowd);
                 }
+                if r.match_finished {
+                    // No epilogue after match point — park the ball, done.
+                    flight.active = false;
+                    reset_ball_to_player(transforms, ball, targets);
+                } else if outcome == RallyOutcome::Out {
+                    // Show the miss: sail it long/wide into the stands
+                    // instead of dying on the baseline like a winner.
+                    let from = flight.to;
+                    let to = if rand::thread_rng().gen::<f32>() < 0.5 {
+                        Vec2::new(from.x, 392.0)
+                    } else {
+                        let side = if from.x >= 0.0 { 1.0 } else { -1.0 };
+                        Vec2::new(side * 305.0, 262.0)
+                    };
+                    start_flight(flight, from, to, 0.42, FlightAfter::OutLanded, Some(0.75));
+                    // Epilogue in flight: phase Return so Space/S wait for it.
+                    tennis.m.phase = Phase::Return;
+                } else {
+                    // Show his reply: the ball comes back at your feet and
+                    // beats you, instead of dying on his side while he wins.
+                    poses.o_swing_until = now + 0.45;
+                    Sfx::synth(sfx, Synth::Hit, (flight.to.x / 160.0).clamp(-1.0, 1.0), vols.ball);
+                    let from = flight.to;
+                    start_flight(flight, from, Vec2::new(targets.player_x, -330.0), 0.65, FlightAfter::CounterLanded, Some(0.55));
+                    tennis.m.phase = Phase::Return;
+                }
             }
-            flight.active = false;
-            reset_ball_to_player(transforms, ball, targets);
         }
         None => do_incoming(tennis, targets, poses, now, mode, vols, pending, flight, ball, transforms),
     }
@@ -1493,6 +1525,15 @@ fn ball_flight(
                 FlightAfter::IncomingLanded => land_incoming(sfx, &vols, *mode, &mut tennis),
                 FlightAfter::ReturnLanded => {
                     land_return(&mut commands, sfx, &vols, *mode, &mut pending, &mut tennis, &mut targets, &mut poses, now, &mut flight, b, &mut transforms, &pa, &mut particles);
+                }
+                FlightAfter::OutLanded | FlightAfter::CounterLanded => {
+                    // Visual epilogue over (point was scored at takeoff):
+                    // park the ball, rally phase back to serve — unless the
+                    // match just ended, then stay Finished.
+                    reset_ball_to_player(&mut transforms, b, &targets);
+                    if tennis.m.phase != Phase::Finished {
+                        tennis.m.phase = Phase::Ready;
+                    }
                 }
                 FlightAfter::None => {}
             }
@@ -2080,5 +2121,53 @@ mod smoke {
         let scored = t.m.pts[0] + t.m.pts[1] == 1;
         let continued = t.m.phase == Phase::Incoming;
         assert!(scored || continued, "phase={:?} pts={:?}", t.m.phase, t.m.pts);
+    }
+
+    fn ball_xy(app: &mut App) -> (f32, f32) {
+        let world = app.world_mut();
+        let mut q = world.query_filtered::<&Transform, With<Ball>>();
+        let tr = q.single(world).unwrap();
+        (tr.translation.x, tr.translation.y)
+    }
+
+    #[test]
+    fn epilogue_landings_park_ball_and_ready() {
+        // Out + counter epilogues are visual only (point scored at takeoff):
+        // when they land, the ball parks at the player and the phase
+        // returns to serve — or stays Finished after match point.
+        for after in [FlightAfter::OutLanded, FlightAfter::CounterLanded] {
+            let mut app = test_app();
+            app.world_mut().resource_mut::<Tennis>().m.phase = Phase::Return;
+            {
+                let mut f = app.world_mut().resource_mut::<Flight>();
+                f.active = true;
+                f.t = 100.0;
+                f.duration = 1.0;
+                f.from = Vec2::new(0.0, 300.0);
+                f.to = Vec2::new(0.0, -330.0);
+                f.after = after;
+                f.bounce_at = None;
+            }
+            app.update();
+            assert!(!app.world().resource::<Flight>().active, "{after:?} still flying");
+            assert_eq!(app.world().resource::<Tennis>().m.phase, Phase::Ready);
+            let (bx, by) = ball_xy(&mut app);
+            assert_eq!((bx, by), (0.0, -260.0), "{after:?} ball not parked");
+        }
+        // Match already over: epilogue landing must not revive Ready.
+        let mut app = test_app();
+        app.world_mut().resource_mut::<Tennis>().m.phase = Phase::Finished;
+        {
+            let mut f = app.world_mut().resource_mut::<Flight>();
+            f.active = true;
+            f.t = 100.0;
+            f.duration = 1.0;
+            f.from = Vec2::new(0.0, 300.0);
+            f.to = Vec2::new(0.0, -330.0);
+            f.after = FlightAfter::CounterLanded;
+            f.bounce_at = None;
+        }
+        app.update();
+        assert_eq!(app.world().resource::<Tennis>().m.phase, Phase::Finished);
     }
 }
