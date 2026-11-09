@@ -2,7 +2,10 @@ name: windows-build
 
 on:
   # Only code/asset changes trigger a build — README-only pushes skip it.
+  # Tags (v*) skip this job: they run the `release` workflow instead.
   push:
+    tags-ignore:
+      - 'v*'
     paths:
       - 'babilon-desktop/**'
       - 'babilon-core/**'
@@ -42,3 +45,7 @@ jobs:
         with:
           name: BabilonTennis-windows-x86_64
           path: package/
+          # Fail the job instead of posting a warning if staging produced
+          # nothing — a "successful" run with no downloadable artifact is
+          # the failure mode this guards against.
+          if-no-files-found: error

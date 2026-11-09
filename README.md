@@ -71,6 +71,20 @@ WASAPI audio, and the 37 MP3s all work through Bevy.
 - Ship the folder `BabilonTennis.exe` next to `assets/sunete/*.mp3` —
   the game loads umpire clips relative to `assets/`.
 
+## Release
+
+Tag-driven, version-checked: bump `babilon-desktop/Cargo.toml`, then
+
+```sh
+git tag v0.5.0 && git push origin v0.5.0
+```
+
+The `release` workflow (`.github/workflows/release.yml`) fails if the tag
+doesn't match the Cargo version, builds the Windows exe, and publishes
+`BabilonTennis-v0.5.0-windows-x86_64.zip` (exe + assets + README) on the
+tag's GitHub Release, with auto-generated notes. Plain pushes still only
+produce the expiring Actions artifact (`windows-build` skips `v*` tags).
+
 ## Mobile later — what stays, what changes
 
 Keeps `babilon-core` untouched. New `babilon-mobile` crate (Bevy, same engine):
