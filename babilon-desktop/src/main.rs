@@ -152,30 +152,43 @@ struct UiFonts {
     bold: Handle<Font>,
 }
 
-/// Plain readable text node for the side panel.
+/// Read-only edit box for one side-panel line.
 ///
-/// Bevy 0.16 only creates AccessKit nodes for `Button` / `Image` / `Label`
-/// entities — a bare `Text` is invisible to JAWS/NVDA. Every info-block line
-/// therefore gets `Label` + an explicit `AccessibilityNode` (Role::Label,
-/// value = visible text) so screen readers can freely browse it. The node
-/// value is kept in sync with the `Text` in `refresh_ui` (Bevy only sets it
-/// once at spawn, so dynamic text would otherwise go stale).
-fn static_a11y_node(text: &str) -> AccessibilityNode {
-    let mut node = accesskit::Node::new(Role::Label);
-    node.set_value(text.to_string().into_boxed_str());
+/// Bevy 0.16 only auto-creates AccessKit nodes for `Button` / `Image` /
+/// `Label` entities — a bare `Text` is invisible to JAWS/NVDA. A `Label`
+/// node (`Role::Label`) is static text: screen readers can browse it with
+/// the virtual cursor but it never takes focus, so Tab/focus navigation
+/// skips it and the tree has no focusable leaves. A read-only
+/// `MultilineTextInput` is focusable *and* readable (`value` = visible
+/// text), so JAWS/NVDA can both browse and move focus onto each line —
+/// a working accessible focus tree.
+///
+/// No `Label` component is attached on purpose: `bevy_ui::label_changed`
+/// resets any explicit node on a `Label` entity back to `Role::Label` in
+/// `PostUpdate`. A bare explicit `AccessibilityNode` still joins the tree
+/// via its `ChildOf` chain, and keeps whatever role we give it.
+/// The node value is kept in sync with the `Text` in `refresh_ui`.
+fn readonly_box(label: &str, value: &str) -> AccessibilityNode {
+    let mut node = accesskit::Node::new(Role::MultilineTextInput);
+    node.set_label(label.to_string().into_boxed_str());
+    node.set_value(value.to_string().into_boxed_str());
+    node.set_read_only();
+    node.add_action(Action::Focus);
     AccessibilityNode::from(node)
 }
 
-/// Live announcement node for the status line ("Acum lovește!", scores…).
+/// Live announcement box for the status line ("Acum lovește!", scores…).
 ///
-/// Role::Status + Live::Polite + atomic => NVDA/JAWS speak every update
-/// without moving focus, like an ARIA live region. Same staleness note as
-/// above: `refresh_ui` rewrites the value on every announcement.
-/// Advertises the Focus action so a screen reader can move focus onto it
-/// (and our `I` key moves Bevy's `InputFocus` here from the keyboard side).
-fn live_a11y_node(text: &str) -> AccessibilityNode {
-    let mut node = accesskit::Node::new(Role::Status);
-    node.set_value(text.to_string().into_boxed_str());
+/// Same read-only edit box as above, plus `Live::Polite` + atomic so
+/// NVDA/JAWS speak every update without moving focus, like an ARIA live
+/// region. Focusable too: `I` moves Bevy's `InputFocus` (mirrored to
+/// AccessKit focus) here from the keyboard side, and a screen reader can
+/// move focus onto it from its side.
+fn live_box(label: &str, value: &str) -> AccessibilityNode {
+    let mut node = accesskit::Node::new(Role::MultilineTextInput);
+    node.set_label(label.to_string().into_boxed_str());
+    node.set_value(value.to_string().into_boxed_str());
+    node.set_read_only();
     node.set_live(Live::Polite);
     node.set_live_atomic();
     node.add_action(Action::Focus);
@@ -183,10 +196,14 @@ fn live_a11y_node(text: &str) -> AccessibilityNode {
 }
 
 /// Handles of the side info block, so a key press can move screen-reader
-/// focus onto it (`I`) and back to the game (`Esc`).
+/// focus through it (`I` cycles, `Esc` back to the game).
+///
+/// `order` is the full Tab/focus order (visual order); `status` is the
+/// live announcements box where the cycle starts.
 #[derive(Resource)]
 struct InfoPanel {
     status: Entity,
+    order: Vec<Entity>,
 }
 
 fn set_node_value(node: &mut AccessibilityNode, text: &str) {
@@ -604,12 +621,12 @@ fn setup(
     });
 
     // Accessible HUD: side panel with Inter (full Romanian diacritics),
-    // docked right of the court so no text covers the game. Every line gets
-    // `Label` + an explicit `AccessibilityNode`, otherwise Bevy 0.16 exposes
-    // nothing (bare `Text` has no AccessKit node) and JAWS/NVDA stay silent.
-    // The status line is a polite live region (Role::Status) so announcements
-    // speak automatically; the rest are plain labels for free browse reading.
-    // The panel itself is a Region so the block navigates as one group.
+    // docked right of the court so no text covers the game. Every line is a
+    // read-only multiline edit box (see `readonly_box`): focusable, so the
+    // AccessKit tree has a working Tab/focus order, not just browsable
+    // static labels. The status box is additionally a polite live region so
+    // announcements speak automatically. The panel itself is a Region so the
+    // block navigates as one group.
     let gold = Color::srgb(0.98, 0.79, 0.40);
     let ink = Color::srgb(0.93, 0.97, 0.97);
     let muted = Color::srgb(0.72, 0.82, 0.85);
@@ -622,7 +639,8 @@ fn setup(
     let shot_txt = "Direcție: centru • Lovitură: plată";
     let phase_txt = "PREGĂTIT PENTRU SERVICIU";
     let mode_txt = "Accesibil • Normal • Volum 100/100/65 • Stereo normal";
-    let help_txt = "S serviciu • Spațiu lovire\n←/→ direcție • 1/2/3 lovitură\nR repetă • P pauză • T test audio\nG dificultate • M mod audio • N stereo\nC grup volum • Z/X volum\nI focusează anunțurile • Esc înapoi la joc";
+    let help_txt = "S serviciu • Spațiu lovire\n←/→ direcție • 1/2/3 lovitură\nR repetă • P pauză • T test audio\nG dificultate • M mod audio • N stereo\nC grup volum • Z/X volum\nI focusează anunțurile (repetat = câmpul următor) • Esc înapoi la joc";
+    let mut order: Vec<Entity> = Vec::with_capacity(7);
     let mut info_status = Entity::PLACEHOLDER;
     commands
         .spawn(Node {
@@ -650,63 +668,77 @@ fn setup(
                 AccessibilityNode::from(panel_node),
             ))
             .with_children(|p| {
-                p.spawn((
-                    Text::new(title_txt),
-                    TextFont { font: bold.clone(), font_size: 15.0, ..default() },
-                    TextColor(gold),
-                    Label,
-                    static_a11y_node(title_txt),
-                ));
-                p.spawn((
-                    ScoreText,
-                    Text::new(score_txt),
-                    TextFont { font: bold.clone(), font_size: 19.0, ..default() },
-                    TextColor(ink),
-                    Label,
-                    static_a11y_node(score_txt),
-                ));
+                order.push(
+                    p.spawn((
+                        Text::new(title_txt),
+                        TextFont { font: bold.clone(), font_size: 15.0, ..default() },
+                        TextColor(gold),
+                        readonly_box("Titlu joc", title_txt),
+                    ))
+                    .id(),
+                );
+                order.push(
+                    p.spawn((
+                        ScoreText,
+                        Text::new(score_txt),
+                        TextFont { font: bold.clone(), font_size: 19.0, ..default() },
+                        TextColor(ink),
+                        readonly_box("Scor", score_txt),
+                    ))
+                    .id(),
+                );
                 info_status = p.spawn((
                     StatusText,
                     Text::new(status_txt),
                     TextFont { font: reg.clone(), font_size: 19.0, ..default() },
                     TextColor(ink),
-                    live_a11y_node(status_txt),
+                    live_box("Anunțuri", status_txt),
                 )).id();
-                p.spawn((
-                    ShotText,
-                    Text::new(shot_txt),
-                    TextFont { font: reg.clone(), font_size: 14.0, ..default() },
-                    TextColor(ink),
-                    Label,
-                    static_a11y_node(shot_txt),
-                ));
-                p.spawn((
-                    PhaseText,
-                    Text::new(phase_txt),
-                    TextFont { font: bold.clone(), font_size: 13.0, ..default() },
-                    TextColor(gold),
-                    Label,
-                    static_a11y_node(phase_txt),
-                ));
-                p.spawn((
-                    ModeText,
-                    Text::new(mode_txt),
-                    TextFont { font: reg.clone(), font_size: 13.0, ..default() },
-                    TextColor(muted),
-                    Label,
-                    static_a11y_node(mode_txt),
-                ));
-                p.spawn((
-                    Text::new(help_txt),
-                    TextFont { font: reg.clone(), font_size: 12.0, ..default() },
-                    TextColor(muted),
-                    Label,
-                    static_a11y_node(help_txt),
-                ));
+                order.push(info_status);
+                order.push(
+                    p.spawn((
+                        ShotText,
+                        Text::new(shot_txt),
+                        TextFont { font: reg.clone(), font_size: 14.0, ..default() },
+                        TextColor(ink),
+                        readonly_box("Direcție și lovitură", shot_txt),
+                    ))
+                    .id(),
+                );
+                order.push(
+                    p.spawn((
+                        PhaseText,
+                        Text::new(phase_txt),
+                        TextFont { font: bold.clone(), font_size: 13.0, ..default() },
+                        TextColor(gold),
+                        readonly_box("Fază joc", phase_txt),
+                    ))
+                    .id(),
+                );
+                order.push(
+                    p.spawn((
+                        ModeText,
+                        Text::new(mode_txt),
+                        TextFont { font: reg.clone(), font_size: 13.0, ..default() },
+                        TextColor(muted),
+                        readonly_box("Mod audio și volum", mode_txt),
+                    ))
+                    .id(),
+                );
+                order.push(
+                    p.spawn((
+                        Text::new(help_txt),
+                        TextFont { font: reg.clone(), font_size: 12.0, ..default() },
+                        TextColor(muted),
+                        readonly_box("Ajutor taste", help_txt),
+                    ))
+                    .id(),
+                );
             });
         });
-    // Remember the status line so `I` can move screen-reader focus onto it.
-    commands.insert_resource(InfoPanel { status: info_status });
+    // Remember the order + live box so `I` can walk screen-reader focus
+    // through the whole block and `Esc` returns to the game.
+    commands.insert_resource(InfoPanel { status: info_status, order });
 }
 
 // ---- game flow (mirrors serve()/incoming()/hit()/point() in JS) ------------
@@ -1252,10 +1284,10 @@ fn settings_keys(
 
 /// Screen-reader focus control for the info block.
 ///
-/// * `I` moves Bevy's `InputFocus` (mirrored to AccessKit focus) onto the
-///   live status line, so JAWS/NVDA jump to the announcements and keep
-///   speaking them. From there the virtual cursor can browse the whole
-///   side panel (score, shot, phase, volumes).
+/// * `I` walks Bevy's `InputFocus` (mirrored to AccessKit focus) through
+///   the read-only boxes in visual order, starting at the live status box,
+///   so JAWS/NVDA jump to the announcements and keep speaking them, then
+///   to score / shot / phase / volumes on repeated presses.
 /// * `Esc` clears focus back to the game window, so play keys stay first.
 /// Game input reads `ButtonInput` directly, so focus never breaks play.
 fn info_focus_keys(
@@ -1265,7 +1297,19 @@ fn info_focus_keys(
 ) {
     if keys.just_pressed(KeyCode::KeyI) {
         if let Some(p) = panel {
-            focus.set(p.status);
+            if p.order.is_empty() {
+                return;
+            }
+            let next = match focus.get() {
+                Some(cur) => p
+                    .order
+                    .iter()
+                    .position(|&e| e == cur)
+                    .map(|i| p.order[(i + 1) % p.order.len()])
+                    .unwrap_or(p.status),
+                None => p.status,
+            };
+            focus.set(next);
         }
     } else if keys.just_pressed(KeyCode::Escape) {
         focus.clear();
@@ -1540,6 +1584,20 @@ fn hit_timeout(
     }
 }
 
+fn refresh_box(node: &mut AccessibilityNode, label: &str, value: &str, live: bool) {
+    // Self-healing: re-assert the read-only-box shape every refresh so the
+    // focus tree stays intact even if another system touched the node.
+    node.set_role(Role::MultilineTextInput);
+    node.set_label(label.to_string().into_boxed_str());
+    node.set_read_only();
+    node.add_action(Action::Focus);
+    if live {
+        node.set_live(Live::Polite);
+        node.set_live_atomic();
+    }
+    set_node_value(node, value);
+}
+
 fn refresh_ui(
     tennis: Res<Tennis>,
     vols: Res<Volumes>,
@@ -1565,17 +1623,13 @@ fn refresh_ui(
     for (mut t, a11y) in &mut score_q {
         **t = score_line.clone();
         if let Some(mut node) = a11y {
-            set_node_value(&mut node, &score_line);
+            refresh_box(&mut node, "Scor", &score_line, false);
         }
     }
     for (mut t, a11y) in &mut status_q {
         **t = tennis.status_ro.clone();
         if let Some(mut node) = a11y {
-            // Keep the live-region flags even if something else rewrote the node.
-            node.set_role(Role::Status);
-            node.set_live(Live::Polite);
-            node.set_live_atomic();
-            set_node_value(&mut node, &tennis.status_ro);
+            refresh_box(&mut node, "Anunțuri", &tennis.status_ro, true);
         }
     }
     let shot_line = format!(
@@ -1586,7 +1640,7 @@ fn refresh_ui(
     for (mut t, a11y) in &mut shot_q {
         **t = shot_line.clone();
         if let Some(mut node) = a11y {
-            set_node_value(&mut node, &shot_line);
+            refresh_box(&mut node, "Direcție și lovitură", &shot_line, false);
         }
     }
     let phase_line = if tennis.paused {
@@ -1597,7 +1651,7 @@ fn refresh_ui(
     for (mut t, a11y) in &mut phase_q {
         **t = phase_line.clone();
         if let Some(mut node) = a11y {
-            set_node_value(&mut node, &phase_line);
+            refresh_box(&mut node, "Fază joc", &phase_line, false);
         }
     }
     let diff_label = match tennis.difficulty {
@@ -1618,7 +1672,7 @@ fn refresh_ui(
     for (mut t, a11y) in &mut mode_q {
         **t = mode_line.clone();
         if let Some(mut node) = a11y {
-            set_node_value(&mut node, &mode_line);
+            refresh_box(&mut node, "Mod audio și volum", &mode_line, false);
         }
     }
 }
@@ -1680,9 +1734,16 @@ mod smoke {
         app.add_event::<A11yActionRequest>();
         let status_e = app
             .world_mut()
-            .spawn((StatusText, live_a11y_node("test")))
+            .spawn((StatusText, live_box("Anunțuri", "test")))
             .id();
-        app.insert_resource(InfoPanel { status: status_e });
+        let score_e = app
+            .world_mut()
+            .spawn((ScoreText, readonly_box("Scor", "test")))
+            .id();
+        app.insert_resource(InfoPanel {
+            status: status_e,
+            order: vec![score_e, status_e],
+        });
         app.add_systems(
             Update,
             (
@@ -1855,14 +1916,47 @@ mod smoke {
 
     #[test]
     fn info_keys_move_screen_reader_focus() {
-        // I focuses the live status line for JAWS/NVDA; Esc returns to game.
+        // I focuses the live status box for JAWS/NVDA; repeated I walks the
+        // whole focus order; Esc returns to game.
         let mut app = test_app();
         assert!(app.world().resource::<InputFocus>().get().is_none());
         let status = app.world().resource::<InfoPanel>().status;
+        let order = app.world().resource::<InfoPanel>().order.clone();
         press(&mut app, KeyCode::KeyI);
         assert_eq!(app.world().resource::<InputFocus>().get(), Some(status));
+        press(&mut app, KeyCode::KeyI);
+        let second = order
+            .iter()
+            .position(|&e| e == status)
+            .map(|i| order[(i + 1) % order.len()])
+            .unwrap();
+        assert_eq!(app.world().resource::<InputFocus>().get(), Some(second));
         press(&mut app, KeyCode::Escape);
         assert!(app.world().resource::<InputFocus>().get().is_none());
+    }
+
+    #[test]
+    fn info_boxes_are_readonly_focusable_inputs() {
+        // The focus tree must be built from read-only edit boxes, not
+        // static labels: every test-app box is a focusable
+        // MultilineTextInput with ReadOnly set, and the live box also
+        // carries a polite live region.
+        use accesskit::Role;
+        let app = test_app();
+        let panel = app.world().resource::<InfoPanel>();
+        assert!(panel.order.len() >= 2);
+        for &e in &panel.order {
+            let node = app.world().get::<AccessibilityNode>(e).expect("box needs a node");
+            assert_eq!(node.role(), Role::MultilineTextInput, "box must be an edit box");
+            assert!(node.is_read_only(), "box must be read-only");
+            assert!(
+                node.supports_action(accesskit::Action::Focus),
+                "box must be focusable"
+            );
+        }
+        let status_node = app.world().get::<AccessibilityNode>(panel.status).unwrap();
+        assert_eq!(status_node.live(), Some(accesskit::Live::Polite));
+        assert!(status_node.is_live_atomic());
     }
 
     #[test]
