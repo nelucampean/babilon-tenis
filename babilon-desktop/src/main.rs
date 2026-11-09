@@ -5,7 +5,7 @@
 //! Screen readers get the status text via Bevy UI (AccessKit) + stdout line.
 //! Stereo MP3s live in `assets/sunete/` (copied from the web version).
 
-use babilon_core::{Difficulty, Match, Phase, RallyOutcome, Shot, LANE_STEP, MAX_DIR};
+use babilon_core::{Difficulty, Dir, Match, Phase, RallyOutcome, Shot, LANE_STEP, MAX_DIR};
 use accesskit::{Action, Live, Role};
 use bevy::a11y::{AccessibilityNode, ActionRequest as A11yActionRequest};
 use bevy::input_focus::{InputDispatchPlugin, InputFocus};
@@ -43,7 +43,7 @@ impl Tennis {
 }
 
 /// One ball flight, animated in `ball_flight`. Mirrors `trajectory()` in JS.
-#[derive(Resource, Default)]
+#[derive(Resource)]
 struct Flight {
     active: bool,
     t: f32,
@@ -55,6 +55,29 @@ struct Flight {
     after: FlightAfter,
     /// Contact quality of the swing that started this flight (0.44..1.0).
     hit_quality: f32,
+    /// Aim + shot snapshotted at contact. The rally MUST resolve with what
+    /// the racket did at hit time — not with whatever ←/→/1-2-3 the player
+    /// mashes during the 0.92s return flight.
+    hit_dir: Dir,
+    hit_shot: Shot,
+}
+
+impl Default for Flight {
+    fn default() -> Self {
+        Self {
+            active: false,
+            t: 0.0,
+            duration: 0.0,
+            from: Vec2::ZERO,
+            to: Vec2::ZERO,
+            bounce_at: None,
+            bounced: false,
+            after: FlightAfter::None,
+            hit_quality: 0.0,
+            hit_dir: 0,
+            hit_shot: Shot::Flat,
+        }
+    }
 }
 
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
@@ -927,15 +950,16 @@ fn land_return(
     transforms: &mut Query<&mut Transform>,
     pa: &ParticleAssets,
     particles: &mut Particles,
-    quality: f32,
 ) {
     let mut rng = rand::thread_rng();
+    // Resolve with the contact snapshot (aim/shot/quality at hit time) —
+    // never with the live keys, which the player may have moved since.
     let outcome = RallyOutcome::resolve(
         tennis.difficulty,
-        tennis.m.dir,
+        flight.hit_dir,
         tennis.m.incoming_side,
-        tennis.m.shot,
-        quality,
+        flight.hit_shot,
+        flight.hit_quality,
         rng.gen(),
         rng.gen(),
         rng.gen(),
@@ -1077,8 +1101,10 @@ fn do_hit(
             Some(0.61),
         );
     }
-    // stash contact quality in flight resource for the rally resolution
+    // stash the contact snapshot in the flight for the rally resolution
     flight.hit_quality = quality;
+    flight.hit_dir = tennis.m.dir;
+    flight.hit_shot = tennis.m.shot;
 }
 
 // ---- systems ---------------------------------------------------------------
@@ -1102,7 +1128,9 @@ fn keyboard(
 ) {
     let sfx = sfx.as_deref();
     if keys.just_pressed(KeyCode::KeyR) {
-        let msg = format!("{} {}", tennis.m.history_ro, tennis.m.score_text_ro());
+        // history_ro already ends with the score line + serve prompt, so
+        // repeating it verbatim avoids announcing the score twice.
+        let msg = tennis.m.history_ro.clone();
         tennis.announce(msg);
         return;
     }
@@ -1457,7 +1485,6 @@ fn ball_flight(
 
     if t >= 1.0 {
         let after = flight.after;
-        let hit_quality = flight.hit_quality;
         let now = time.elapsed_secs();
         flight.active = false;
         if let Some(b) = ball {
@@ -1465,7 +1492,7 @@ fn ball_flight(
                 FlightAfter::ServeLanded => land_serve(&mut commands, sfx, &vols, *mode, &mut pending, &mut tennis, &mut targets, &mut poses, now, &mut flight, b, &mut transforms, &pa, &mut particles),
                 FlightAfter::IncomingLanded => land_incoming(sfx, &vols, *mode, &mut tennis),
                 FlightAfter::ReturnLanded => {
-                    land_return(&mut commands, sfx, &vols, *mode, &mut pending, &mut tennis, &mut targets, &mut poses, now, &mut flight, b, &mut transforms, &pa, &mut particles, hit_quality);
+                    land_return(&mut commands, sfx, &vols, *mode, &mut pending, &mut tennis, &mut targets, &mut poses, now, &mut flight, b, &mut transforms, &pa, &mut particles);
                 }
                 FlightAfter::None => {}
             }
@@ -1571,7 +1598,10 @@ fn hit_timeout(
     };
     if expired {
         tennis.hit_window = None;
-        let r = tennis.m.score_point(1, "Ai ratat mingea");
+        // Distinct from the whiff ("too far") message: here the 1.4s hitting
+        // window lapsed with no swing at all (Space never pressed in time),
+        // so say so — otherwise a slightly-late press feels like a stolen point.
+        let r = tennis.m.score_point(1, "Timp expirat! N-ai lovit la semnal");
         let msg = r.message_ro.clone();
         tennis.announce(msg);
         let sfx = sfx.as_deref();
@@ -1994,6 +2024,58 @@ mod smoke {
         app.update();
         // Point scored either way, or the rally continues — but never a
         // silent miss while we hit on time.
+        let t = app.world().resource::<Tennis>();
+        let scored = t.m.pts[0] + t.m.pts[1] == 1;
+        let continued = t.m.phase == Phase::Incoming;
+        assert!(scored || continued, "phase={:?} pts={:?}", t.m.phase, t.m.pts);
+    }
+
+    #[test]
+    fn return_uses_hit_time_aim_not_midflight_keys() {
+        // Aim + shot are snapshotted at contact: mashing arrows / 1-2-3
+        // during the 0.92s return flight must not change the outcome,
+        // nor disagree with the "Lovitură … spre …" announcement.
+        let mut app = test_app();
+        press(&mut app, KeyCode::KeyS);
+        app.world_mut().resource_mut::<Flight>().t = 100.0;
+        app.update();
+        if app.world().resource::<Tennis>().m.phase == Phase::Ready {
+            return; // serve ace (8% on Normal), no rally to snapshot
+        }
+        app.world_mut().resource_mut::<Flight>().t = 100.0;
+        app.update();
+        assert_eq!(app.world().resource::<Tennis>().m.phase, Phase::Hit);
+        {
+            let landing_x = app.world().resource::<Flight>().to.x;
+            let paddle = app.world().resource::<Rigs>().player.root;
+            app.world_mut().get_mut::<Transform>(paddle).unwrap().translation.x = landing_x;
+        }
+        press(&mut app, KeyCode::ArrowRight);
+        press(&mut app, KeyCode::ArrowRight);
+        press(&mut app, KeyCode::Digit2); // topspin
+        assert_eq!(app.world().resource::<Tennis>().m.dir, 2);
+        press(&mut app, KeyCode::Space);
+        assert_eq!(app.world().resource::<Tennis>().m.phase, Phase::Return);
+        {
+            let f = app.world().resource::<Flight>();
+            assert_eq!(f.hit_dir, 2);
+            assert_eq!(f.hit_shot, Shot::Topspin);
+        }
+        // Mash keys mid-flight: live aim changes, snapshot must not.
+        press(&mut app, KeyCode::ArrowLeft);
+        press(&mut app, KeyCode::ArrowLeft);
+        press(&mut app, KeyCode::ArrowLeft);
+        press(&mut app, KeyCode::ArrowLeft);
+        press(&mut app, KeyCode::Digit1); // flat
+        assert_eq!(app.world().resource::<Tennis>().m.dir, -2);
+        {
+            let f = app.world().resource::<Flight>();
+            assert_eq!(f.hit_dir, 2, "snapshot must survive mid-flight keys");
+            assert_eq!(f.hit_shot, Shot::Topspin);
+        }
+        // Landing resolves without panic; point or continued rally.
+        app.world_mut().resource_mut::<Flight>().t = 100.0;
+        app.update();
         let t = app.world().resource::<Tennis>();
         let scored = t.m.pts[0] + t.m.pts[1] == 1;
         let continued = t.m.phase == Phase::Incoming;
