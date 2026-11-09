@@ -1,6 +1,6 @@
 name: release
 
-# Tag-driven: `git tag v0.5.0 && git push origin v0.5.0` builds the Windows
+# Tag-driven: `git tag v0.5.0` + `git push origin v0.5.0` builds the Windows
 # package and publishes it on the tag's GitHub Release. The tag must match
 # babilon-desktop's Cargo version (checked below).
 on:

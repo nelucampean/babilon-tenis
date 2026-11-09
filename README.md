@@ -76,7 +76,8 @@ WASAPI audio, and the 37 MP3s all work through Bevy.
 Tag-driven, version-checked: bump `babilon-desktop/Cargo.toml`, then
 
 ```sh
-git tag v0.5.0 && git push origin v0.5.0
+git tag v0.5.0
+git push origin v0.5.0
 ```
 
 The `release` workflow (`.github/workflows/release.yml`) fails if the tag
