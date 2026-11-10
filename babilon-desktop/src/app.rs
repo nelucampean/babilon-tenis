@@ -8,10 +8,10 @@ use bevy::render::mesh::Mesh2d;
 use bevy::sprite::MeshMaterial2d;
 
 use crate::a11y::*;
+use crate::announce::{self, Announce, Announcer};
 use crate::athlete::*;
 use crate::audio::{self, Pending, Sfx};
 use crate::ball::*;
-use crate::gameplay::hit_timeout;
 use crate::gameplay::*;
 use crate::hud::*;
 use crate::input::*;
@@ -48,11 +48,12 @@ pub(crate) fn run() {
                 ..default()
             }),
     )
+    .init_resource::<Announcer>()
+    .add_event::<Announce>()
     .insert_resource(Tennis {
         m: Match::new(),
         difficulty: saved.difficulty,
         paused: false,
-        status_ro: "Meci nou. Apasă S pentru serviciu.".into(),
         hit_window: None,
         opp_serve_timer: None,
         opp_serve_origin: 1,
@@ -88,6 +89,7 @@ pub(crate) fn run() {
             particle_fx,
             hit_timeout,
             audio::play_pending,
+            announce::announce_sink,
             refresh_ui,
             animate_athletes,
         )
@@ -109,6 +111,9 @@ pub(crate) fn setup(
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     commands.spawn(Camera2d);
+    commands.insert_resource(Announcer {
+        status_ro: "Meci nou. Apasă S pentru serviciu.".into(),
+    });
 
     // Bundled Inter (full Romanian ș/ț/ă/â/î coverage, OFL-licensed,
     // same files on Linux / Windows / macOS / mobile).

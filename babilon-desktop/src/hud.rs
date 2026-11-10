@@ -5,6 +5,7 @@ use bevy::a11y::AccessibilityNode;
 use bevy::prelude::*;
 
 use crate::a11y::{refresh_box, set_node_value};
+use crate::announce::Announcer;
 use crate::audio::{AudioMode, Sfx, Volumes};
 use crate::gameplay::Tennis;
 use crate::scoreboard::{scoreboard_texts, SbCell, SbCol, SbRoot};
@@ -24,6 +25,7 @@ pub(crate) struct ModeText;
 
 pub(crate) fn refresh_ui(
     tennis: Res<Tennis>,
+    announcer: Res<Announcer>,
     vols: Res<Volumes>,
     mode: Res<AudioMode>,
     sfx: Option<Res<Sfx>>,
@@ -78,7 +80,7 @@ pub(crate) fn refresh_ui(
         ),
     >,
 ) {
-    if !tennis.is_changed() && !vols.is_changed() && !mode.is_changed() {
+    if !tennis.is_changed() && !announcer.is_changed() && !vols.is_changed() && !mode.is_changed() {
         return;
     }
     let score_line = format!(
@@ -96,9 +98,9 @@ pub(crate) fn refresh_ui(
         }
     }
     for (mut t, a11y) in &mut status_q {
-        **t = tennis.status_ro.clone();
+        **t = announcer.status_ro.clone();
         if let Some(mut node) = a11y {
-            refresh_box(&mut node, "Anunțuri", &tennis.status_ro, true);
+            refresh_box(&mut node, "Anunțuri", &announcer.status_ro, true);
         }
     }
     let shot_line = format!(

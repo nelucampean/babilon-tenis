@@ -6,6 +6,7 @@
 //! Stereo MP3s live in `assets/sunete/` (copied from the web version).
 
 mod a11y;
+mod announce;
 mod app;
 mod athlete;
 mod audio;
@@ -28,6 +29,7 @@ mod smoke {
     //! (B0001 — only raised at first schedule run, not by `cargo check`)
     //! and plays a full point without a display or audio device.
     use crate::a11y::*;
+    use crate::announce::*;
     use crate::athlete::*;
     use crate::audio;
     use crate::audio::*;
@@ -69,7 +71,6 @@ mod smoke {
             m: Match::new(),
             difficulty: Difficulty::Normal,
             paused: false,
-            status_ro: String::new(),
             hit_window: None,
             opp_serve_timer: None,
             opp_serve_origin: 1,
@@ -85,6 +86,8 @@ mod smoke {
         app.insert_resource(Volumes::default());
         app.insert_resource(AudioMode::Access);
         app.insert_resource(Pending::default());
+        app.init_resource::<Announcer>();
+        app.add_event::<Announce>();
         app.insert_resource(ParticleAssets {
             mesh: Handle::default(),
             gold: Handle::default(),
@@ -119,6 +122,7 @@ mod smoke {
                 particle_fx,
                 hit_timeout,
                 audio::play_pending,
+                announce_sink,
                 refresh_ui,
                 animate_athletes,
             )
@@ -177,14 +181,14 @@ mod smoke {
         assert_eq!(app.world().resource::<Targets>().player_x, -LANE_STEP);
         assert!(app
             .world()
-            .resource::<Tennis>()
+            .resource::<Announcer>()
             .status_ro
             .contains("mijloc-stânga"));
         press(&mut app, KeyCode::ArrowLeft);
         assert_eq!(app.world().resource::<Targets>().player_x, -2.0 * LANE_STEP);
         assert!(app
             .world()
-            .resource::<Tennis>()
+            .resource::<Announcer>()
             .status_ro
             .contains("stânga"));
         for _ in 0..4 {
@@ -193,7 +197,7 @@ mod smoke {
         assert_eq!(app.world().resource::<Targets>().player_x, 2.0 * LANE_STEP);
         assert!(app
             .world()
-            .resource::<Tennis>()
+            .resource::<Announcer>()
             .status_ro
             .contains("dreapta"));
     }
@@ -230,7 +234,11 @@ mod smoke {
             "whiff ends the point, no return flight"
         );
         assert_eq!(t.m.pts, [0, 1]);
-        assert!(t.status_ro.contains("departe"));
+        assert!(app
+            .world()
+            .resource::<Announcer>()
+            .status_ro
+            .contains("departe"));
         assert!(t.hit_window.is_none());
     }
 
@@ -254,7 +262,7 @@ mod smoke {
         assert_eq!(app.world().resource::<Tennis>().m.phase, Phase::Incoming);
         assert!(app
             .world()
-            .resource::<Tennis>()
+            .resource::<Announcer>()
             .status_ro
             .contains("fileul"));
         // ball past the net (progress 0.7, y well below NET_Y): step to
@@ -297,7 +305,7 @@ mod smoke {
         press(&mut app, KeyCode::KeyN);
         assert!(app
             .world()
-            .resource::<Tennis>()
+            .resource::<Announcer>()
             .status_ro
             .contains("Stereo normal"));
         // T exercises every Sfx path headless (synth + clip with no engine).
@@ -539,9 +547,9 @@ mod smoke {
             let t = app.world().resource::<Tennis>();
             assert_eq!(t.m.pts, [0, 1], "{after:?} point not scored");
             assert!(
-                t.status_ro.contains(word),
+                app.world().resource::<Announcer>().status_ro.contains(word),
                 "{after:?} call missing: {}",
-                t.status_ro
+                app.world().resource::<Announcer>().status_ro
             );
             assert_eq!(t.m.phase, Phase::Ready);
             let (bx, by) = ball_xy(&mut app);
@@ -576,9 +584,12 @@ mod smoke {
         let t = app.world().resource::<Tennis>();
         assert_eq!(t.m.phase, Phase::Serve);
         assert!(
-            t.status_ro.contains("Adversarul servește de la"),
+            app.world()
+                .resource::<Announcer>()
+                .status_ro
+                .contains("Adversarul servește de la"),
             "stance not signaled: {}",
-            t.status_ro
+            app.world().resource::<Announcer>().status_ro
         );
         assert!(t.opp_serve_timer.is_some(), "no signal timer");
         assert!(
@@ -621,9 +632,12 @@ mod smoke {
         if t.m.phase == Phase::Hit {
             assert!(t.hit_window.is_some(), "HIT cue without a window");
             assert!(
-                t.status_ro.contains("lovește"),
+                app.world()
+                    .resource::<Announcer>()
+                    .status_ro
+                    .contains("lovește"),
                 "no HIT call: {}",
-                t.status_ro
+                app.world().resource::<Announcer>().status_ro
             );
         } else {
             // Ace (8% on Normal): point to him, parked, ready again.
@@ -767,9 +781,12 @@ mod smoke {
         press(&mut app, KeyCode::KeyS);
         let t = app.world().resource::<Tennis>();
         assert!(
-            t.status_ro.contains("Adversarul servește"),
+            app.world()
+                .resource::<Announcer>()
+                .status_ro
+                .contains("Adversarul servește"),
             "wrong S answer: {}",
-            t.status_ro
+            app.world().resource::<Announcer>().status_ro
         );
         assert_eq!(t.m.pts, [0, 0], "S scored a point on his serve");
         let f = app.world().resource::<Flight>();

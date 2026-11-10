@@ -154,7 +154,7 @@ pub(crate) fn ball_flight(world: GameWorld) {
                     &pa,
                     &mut particles,
                 ),
-                FlightAfter::IncomingLanded => land_incoming(&audio, &mut tennis),
+                FlightAfter::IncomingLanded => land_incoming(&mut commands, &audio, &mut tennis),
                 FlightAfter::OpponentServeLanded => land_opponent_serve(
                     &mut commands,
                     &mut audio,
@@ -187,7 +187,7 @@ pub(crate) fn ball_flight(world: GameWorld) {
                     // under the line call.
                     let r = tennis.m.score_point(1, "AUT! Mingea ta a ieșit afară");
                     let msg = r.message_ro.clone();
-                    tennis.announce(msg);
+                    crate::announce::announce(&mut commands, msg);
                     audio.umpire(&r.umpire);
                     audio.synth(Synth::Bad, 0.0, Bus::Ball);
                     if rand::thread_rng().gen::<f32>() < 0.40 {
@@ -207,7 +207,7 @@ pub(crate) fn ball_flight(world: GameWorld) {
                         .m
                         .score_point(1, "Contraatac! Adversarul a câștigat punctul");
                     let msg = r.message_ro.clone();
-                    tennis.announce(msg);
+                    crate::announce::announce(&mut commands, msg);
                     audio.umpire(&r.umpire);
                     audio.synth(Synth::Bad, 0.0, Bus::Ball);
                     if rand::thread_rng().gen::<f32>() < 0.40 {

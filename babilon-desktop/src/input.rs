@@ -2,6 +2,7 @@
 use babilon_core::{Difficulty, Phase, Shot, LANE_STEP, MAX_DIR};
 use bevy::prelude::*;
 
+use crate::announce::announce;
 use crate::audio::{AudioCtx, AudioMode, Bus, Pending, Sfx, Synth, VolGroup, Volumes};
 
 use crate::gameplay::{do_hit, do_serve, GameWorld, Tennis};
@@ -35,7 +36,7 @@ pub(crate) fn keyboard(world: GameWorld, keys: Res<ButtonInput<KeyCode>>) {
         // history_ro already ends with the score line + serve prompt, so
         // repeating it verbatim avoids announcing the score twice.
         let msg = tennis.m.history_ro.clone();
-        tennis.announce(msg);
+        announce(&mut commands, msg);
         return;
     }
     if keys.just_pressed(KeyCode::KeyO) {
@@ -49,7 +50,10 @@ pub(crate) fn keyboard(world: GameWorld, keys: Res<ButtonInput<KeyCode>>) {
             .unwrap_or(0)
             .clamp(-MAX_DIR, MAX_DIR);
         audio.synth(Synth::Foe(lane), lane as f32 / MAX_DIR as f32, Bus::Ball);
-        tennis.announce(format!("Adversar: {}.", babilon_core::dir_label_ro(lane)));
+        announce(
+            &mut commands,
+            format!("Adversar: {}.", babilon_core::dir_label_ro(lane)),
+        );
         return;
     }
     if keys.just_pressed(KeyCode::KeyP) {
@@ -61,13 +65,13 @@ pub(crate) fn keyboard(world: GameWorld, keys: Res<ButtonInput<KeyCode>>) {
         if tennis.paused {
             tennis.hit_window = None;
             tennis.opp_serve_timer = None;
-            tennis.announce("Pauză. Apasă P pentru reluare.".into());
+            announce(&mut commands, "Pauză. Apasă P pentru reluare.");
         } else {
             tennis.m.phase = Phase::Ready;
             if tennis.m.is_player_serve() {
-                tennis.announce("Meci reluat. Apasă S pentru serviciu.".into());
+                announce(&mut commands, "Meci reluat. Apasă S pentru serviciu.");
             } else {
-                tennis.announce("Meci reluat. Adversarul servește.".into());
+                announce(&mut commands, "Meci reluat. Adversarul servește.");
             }
         }
         return;
@@ -84,30 +88,37 @@ pub(crate) fn keyboard(world: GameWorld, keys: Res<ButtonInput<KeyCode>>) {
         // Position blip: pitch (low/mid/high) + pan both encode the lane,
         // so you always know where you stand without looking.
         audio.synth(Synth::Lane(d), d as f32 / MAX_DIR as f32, Bus::Ball);
-        tennis.announce(format!("Direcție: {}", babilon_core::dir_label_ro(d)));
+        announce(
+            &mut commands,
+            format!("Direcție: {}", babilon_core::dir_label_ro(d)),
+        );
     }
     if keys.just_pressed(KeyCode::ArrowRight) {
         tennis.m.nudge_dir(1);
         let d = tennis.m.dir;
         targets.player_x = d as f32 * LANE_STEP;
         audio.synth(Synth::Lane(d), d as f32 / MAX_DIR as f32, Bus::Ball);
-        tennis.announce(format!("Direcție: {}", babilon_core::dir_label_ro(d)));
+        announce(
+            &mut commands,
+            format!("Direcție: {}", babilon_core::dir_label_ro(d)),
+        );
     }
     if keys.just_pressed(KeyCode::Digit1) {
         tennis.m.set_shot(Shot::Flat);
-        tennis.announce("Lovitură plată".into());
+        announce(&mut commands, "Lovitură plată");
     }
     if keys.just_pressed(KeyCode::Digit2) {
         tennis.m.set_shot(Shot::Topspin);
-        tennis.announce("Lovitură liftată".into());
+        announce(&mut commands, "Lovitură liftată");
     }
     if keys.just_pressed(KeyCode::Digit3) {
         tennis.m.set_shot(Shot::Slice);
-        tennis.announce("Lovitură slice".into());
+        announce(&mut commands, "Lovitură slice");
     }
     if keys.just_pressed(KeyCode::KeyS) {
         if let Ok(ball) = balls.single() {
             do_serve(
+                &mut commands,
                 &mut audio,
                 &mut tennis,
                 &mut targets,
@@ -161,6 +172,7 @@ pub(crate) fn persist_settings(
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn settings_keys(
+    mut commands: Commands,
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     mut tennis: ResMut<Tennis>,
@@ -184,7 +196,10 @@ pub(crate) fn settings_keys(
             clip_key: Some("fifteen-love".into()),
         });
         audio.clip("applause", 0.0, Bus::Crowd);
-        tennis.announce("Test audio: stânga … apoi dreapta, ricoșeu, arbitru și aplauze.".into());
+        announce(
+            &mut commands,
+            "Test audio: stânga … apoi dreapta, ricoșeu, arbitru și aplauze.",
+        );
         return;
     }
     if keys.just_pressed(KeyCode::KeyG) {
@@ -198,7 +213,7 @@ pub(crate) fn settings_keys(
             Difficulty::Normal => "Normal",
             Difficulty::Hard => "Greu",
         };
-        tennis.announce(format!("Dificultate: {label}."));
+        announce(&mut commands, format!("Dificultate: {label}."));
         persist_settings(&tennis, &vols, &mode, sfx);
         return;
     }
@@ -207,7 +222,7 @@ pub(crate) fn settings_keys(
             AudioMode::Access => AudioMode::Real,
             AudioMode::Real => AudioMode::Access,
         };
-        tennis.announce(format!("Mod audio {}.", mode.label_ro()));
+        announce(&mut commands, format!("Mod audio {}.", mode.label_ro()));
         persist_settings(&tennis, &vols, &mode, sfx);
         return;
     }
@@ -217,13 +232,16 @@ pub(crate) fn settings_keys(
         if let Some(s) = sfx {
             let swapped = !s.swapped();
             s.set_swapped(swapped);
-            tennis.announce(if swapped {
-                "Stereo inversat (stânga-dreapta).".into()
-            } else {
-                "Stereo normal.".into()
-            });
+            announce(
+                &mut commands,
+                if swapped {
+                    "Stereo inversat (stânga-dreapta)."
+                } else {
+                    "Stereo normal."
+                },
+            );
         } else {
-            tennis.announce("Stereo normal (fără motor audio).".into());
+            announce(&mut commands, "Stereo normal (fără motor audio).");
         }
         persist_settings(&tennis, &vols, &mode, sfx);
         return;
@@ -235,11 +253,14 @@ pub(crate) fn settings_keys(
             VolGroup::Umpire => vols.umpire,
             VolGroup::Crowd => vols.crowd,
         };
-        tennis.announce(format!(
-            "Grup volum: {}. {}%. Z scade, X crește.",
-            vols.group.label_ro(),
-            (v * 100.0) as u32
-        ));
+        announce(
+            &mut commands,
+            format!(
+                "Grup volum: {}. {}%. Z scade, X crește.",
+                vols.group.label_ro(),
+                (v * 100.0) as u32
+            ),
+        );
         persist_settings(&tennis, &vols, &mode, sfx);
         return;
     }
@@ -253,11 +274,10 @@ pub(crate) fn settings_keys(
         if let Some(s) = sfx {
             s.refresh_ambient(vols.crowd);
         }
-        tennis.announce(format!(
-            "Volum {}: {}%.",
-            group.label_ro(),
-            (v * 100.0) as u32
-        ));
+        announce(
+            &mut commands,
+            format!("Volum {}: {}%.", group.label_ro(), (v * 100.0) as u32),
+        );
         persist_settings(&tennis, &vols, &mode, sfx);
     }
 }
