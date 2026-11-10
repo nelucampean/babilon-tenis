@@ -510,7 +510,7 @@ fn play_synth(handle: &OutputStreamHandle, kind: Synth, pan: f32, vol: f32) {
 fn open_output(
     crowd: f32,
     clips: &HashMap<String, SamplesBuffer<i16>>,
-) -> Option<(OutputStream, OutputStreamHandle, Sink)> {
+) -> Option<(OutputStream, OutputStreamHandle, Option<Sink>)> {
     // Always the OS default device (no in-game switching).
     eprintln!("[AUDIO] opening default output...");
     let (stream, handle) = match OutputStream::try_default() {
@@ -521,12 +521,29 @@ fn open_output(
         }
     };
     eprintln!("[AUDIO] stream open, creating ambient sink...");
-    let ambient = Sink::try_new(&handle).ok()?;
-    ambient.set_volume(ambient_gain(crowd));
-    if let Some(buf) = clips.get("ambient") {
-        ambient.append(buf.clone().repeat_infinite());
-    }
-    eprintln!("[AUDIO] output: default (ambient looping)");
+    // A missing ambience sink must not disable one-shot SFX and umpire
+    // clips: keep the output stream alive and continue without ambience.
+    let ambient = match Sink::try_new(&handle) {
+        Ok(sink) => {
+            sink.set_volume(ambient_gain(crowd));
+            if let Some(buf) = clips.get("ambient") {
+                sink.append(buf.clone().repeat_infinite());
+            }
+            Some(sink)
+        }
+        Err(e) => {
+            eprintln!("[AUDIO] ambient sink unavailable ({e}); continuing without crowd ambience.");
+            None
+        }
+    };
+    eprintln!(
+        "[AUDIO] output: default ({})",
+        if ambient.is_some() {
+            "ambient looping"
+        } else {
+            "no ambience"
+        }
+    );
     Some((stream, handle, ambient))
 }
 
@@ -546,7 +563,14 @@ fn audio_thread(rx: std::sync::mpsc::Receiver<Cmd>, crowd: f32) {
         eprintln!("[AUDIO] sound folder not found (looked for babilon-desktop/assets/sunete and assets/sunete)");
     }
     eprintln!("[AUDIO] decoded {} clips", clips.len());
-    eprintln!("[AUDIO] devices: {:?}", list_output_devices());
+    // Device enumeration is diagnostic-only and can block for a long time
+    // on Linux: the ALSA `default` config probes the JACK plugin, which
+    // prints "Cannot connect to server request channel" and waits for a
+    // socket before falling back. Never do that on the startup path — the
+    // game only uses the OS default output anyway. Opt in when debugging.
+    if std::env::var_os("BABILON_AUDIO_DEBUG").is_some() {
+        eprintln!("[AUDIO] devices: {:?}", list_output_devices());
+    }
     let audio = open_output(crowd, &clips);
     eprintln!("[AUDIO] entering command loop");
     for cmd in rx {
@@ -569,7 +593,7 @@ fn audio_thread(rx: std::sync::mpsc::Receiver<Cmd>, crowd: f32) {
                 }
             }
             Cmd::AmbientVol(v) => {
-                if let Some((_, _, ambient)) = &audio {
+                if let Some((_, _, Some(ambient))) = &audio {
                     ambient.set_volume(ambient_gain(v));
                 }
             }
@@ -582,7 +606,15 @@ impl Sfx {
         #[cfg(target_os = "linux")]
         silence_alsa_chatter();
         let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || audio_thread(rx, crowd));
+        // Named thread so a backend panic is identifiable in logs. Spawn
+        // failure is not fatal: the game continues silently and `send`
+        // becomes a no-op once the receiver is gone.
+        if let Err(e) = std::thread::Builder::new()
+            .name("babilon-audio".into())
+            .spawn(move || audio_thread(rx, crowd))
+        {
+            eprintln!("[AUDIO] cannot start audio thread ({e}); game stays silent.");
+        }
         let sfx = Self {
             tx,
             swap: Default::default(),
@@ -653,6 +685,11 @@ impl Sfx {
 
 /// All OS output devices by name. Empty when the backend can't enumerate
 /// (some Linux setups without pipewire-alsa/PulseAudio routing).
+///
+/// **Not on the startup path**: enumerating probes every ALSA plugin,
+/// including JACK; without a running JACK server that can block for a
+/// long time. Startup only opens the default output (`open_output`).
+/// Set `BABILON_AUDIO_DEBUG=1` to opt in.
 pub fn list_output_devices() -> Vec<String> {
     match rodio::cpal::default_host().output_devices() {
         Ok(devs) => devs.filter_map(|d| d.name().ok()).collect(),

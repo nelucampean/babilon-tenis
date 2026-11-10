@@ -155,6 +155,11 @@ events without any audio device.
   curve; applause on your points, 40% crowd reaction on lost ones.
 * Runs on a dedicated audio thread (cpal streams are `!Send`) behind a
   channel — the game never blocks on audio, and headless runs stay silent.
+  Startup opens the OS default output directly: enumerating every ALSA
+  device can block on the JACK plugin when no JACK server is running
+  ("Cannot connect to server request channel"), so that probe is opt-in
+  via `BABILON_AUDIO_DEBUG=1`. A missing ambience sink only disables the
+  crowd loop, never the one-shot SFX/umpire clips.
 * Keys: `G` difficulty (Ușor/Normal/Greu — harder bots read serves
   better, eat more of your timing, counter weak balls, and hunt the far
   corner from where you stand), `M` audio mode
