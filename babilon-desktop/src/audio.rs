@@ -321,6 +321,9 @@ impl AudioMode {
 /// mismatches) is normal on every enumerate/open — without this it reads
 /// like a crash. Called once, on the audio thread, before first use.
 #[cfg(target_os = "linux")]
+// One FFI call: install ALSA's silent error handler. No other unsafe in
+// the workspace; the lint stays `warn` everywhere else.
+#[allow(unsafe_code)]
 fn silence_alsa_chatter() {
     unsafe extern "C" fn noop(
         _file: *const std::os::raw::c_char,
@@ -953,7 +956,9 @@ mod tests {
         // (splitting samples across channels instead halves durations).
         let out: Vec<f32> = Pan::new(tone(440.0, 440.0, 0.02, 1.0), 0.0).collect();
         assert_eq!(out.len() % 2, 0);
-        for pair in out.chunks_exact(2) {
+        let (pairs, rest) = out.as_chunks::<2>();
+        assert!(rest.is_empty());
+        for pair in pairs {
             assert!((pair[0] - pair[1]).abs() < 1e-6, "{pair:?}");
         }
     }

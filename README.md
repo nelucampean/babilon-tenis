@@ -5,28 +5,59 @@ Core rules are a faithful port of `index.html` v0.5 JS.
 
 ## Layout
 
-- `babilon-core/` — pure rules, no UI deps. Reused by desktop now, mobile later.
+- `babilon-core/` — pure rules, no UI deps, no user-facing strings.
+  Reused by desktop now, mobile later.
   - scoring: 1 set to 6 (win by 2), 6–6 → tie-break to 7 (win by 2)
   - state machine: Ready → Serve → Incoming → Hit → Return → Ready/Finished
   - serve ace chance (easy .13 / normal .08 / hard .035)
   - return math: quality windows (330/750/1100 ms), out/winner/counter chances
-  - RO score strings + EN umpire calls + `sunete/*.mp3` clip keys
-  - `cargo test -p babilon-core` → 10 tests, all passing
-- `babilon-desktop/` — Bevy 2D accessible desktop game.
+  - structured `PointResult` flags + EN umpire calls + `sunete/*.mp3` clip keys
+  - `cargo test -p babilon-core` → 20 tests, all passing
+- `babilon-desktop/` — Bevy 2D accessible desktop game (library + thin bin).
   - same keyboard: `S` serve, `Space` hit, `←/→` direction, `1/2/3` shot,
     `R` repeat, `P` pause, `T` audio test
   - court + paddles + ball drawn in 2D (mirrors `court()` in JS)
+  - Romanian labels, score lines and announcements live in `src/text.rs`
   - umpire MP3s from `babilon-desktop/assets/sunete/` (37 files, copied)
   - screen readers: Bevy UI text nodes (AccessKit → NVDA/Narrator/VoiceOver/Orca)
     + stdout `[ANUNȚ]` lines as fallback
+  - `cargo test -p babilon-desktop` → 39 headless tests, all passing
 - `assets/sunete/` — copied verbatim from the web version.
+
+## Architecture
+
+The desktop crate is split so a new screen (menu, settings, results) is a
+small change instead of a rewrite:
+
+| Module | Owns |
+| --- | --- |
+| `app.rs` | `run()` (plugins, Startup scene) and `build_app(app, settings)` — the shared state/resources/`Update` chain used by both the real app and the headless tests |
+| `state.rs` | `AppState { Playing, Paused }`; gameplay systems run only in `Playing` |
+| `settings.rs` | one `Settings` resource (difficulty, audio mode, volumes, stereo swap) + `autosave` |
+| `announce.rs` | `Announce` event → `Announcer` status line + stdout screen-reader line |
+| `sound.rs` | `Sound` events; gameplay requests audio without knowing rodio |
+| `audio.rs` | rodio engine + `audio_service`, the only system that resolves `Sound` events against `Settings` |
+| `text.rs` | every Romanian label, score line, point message and TV column |
+| `layout.rs` / `theme.rs` | window/court geometry + the full palette as constants |
+| `hud.rs` | one `InfoLine` enum + `HudWorld` SystemParam; data-driven panel rows |
+| `gameplay.rs` / `ball.rs` / `input.rs` | rules, flight, keyboard (events in, events out) |
+
+`babilon-core` knows nothing about Bevy, audio, Romanian text or persistence:
+it exposes points/games/sets, umpire clip keys and structured `PointResult`
+flags. All presentation is a desktop concern, so a future mobile crate can
+reuse the rules with different text and input.
 
 ## Run
 
 ```sh
-cargo test -p babilon-core
+cargo test --workspace                       # 20 core + 39 desktop, headless
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
 cargo run -p babilon-desktop
 ```
+
+`.github/workflows/ci.yml` runs exactly those three checks on every push
+and PR (Linux); `windows.yml` / `release.yml` build the Windows exe.
 
 Needs a display + audio (desktop). First keypress unlocks audio, same as web.
 
@@ -95,9 +126,17 @@ produce the expiring Actions artifact (`windows-build` skips `v*` tags).
 Keeps `babilon-core` untouched. New `babilon-mobile` crate (Bevy, same engine):
 - touch: swipe = direction, tap = hit, buttons for serve/shot type
 - bigger type, haptics on the HIT cue, first-tap audio unlock
+- reuse `app::build_app` for the same schedule; swap `text.rs` for another
+  language and provide a mobile `audio_service` (or none at all)
 - `cargo apk` (Android) / Xcode (iOS) builds from the same Bevy app
 
-## Sound (rodio, `babilon-desktop/src/audio.rs`)
+## Sound (`sound.rs` events → `audio.rs` service)
+
+Gameplay emits `Sound` events (synth / cue / clip / umpire / guide /
+schedule) through `commands`; `audio_service` is the only system that
+touches rodio, applying group volumes, Access/Realist behaviour, stereo
+swap, ambience and the delayed-cue queue. Headless tests capture those
+events without any audio device.
 
 * Stereo-positioned synth SFX with the web's recipes, through an exact
   constant-power panner (hard left = left, hard right = right): guide
@@ -172,3 +211,5 @@ cargo run -p babilon-desktop
 * TTS fallback for tie-break scores (currently a console line + English MP3s
   where they exist).
 * High-contrast / font-size options.
+* Menu / settings / results screens: `AppState` and `build_app` already
+  gate gameplay, so these are new states + UI layers, not a rewrite.

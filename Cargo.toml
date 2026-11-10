@@ -1,3 +1,13 @@
 [workspace]
 members = ["babilon-core", "babilon-desktop"]
 resolver = "2"
+
+# Shared lint policy for both crates (each opts in with `[lints] workspace = true`).
+# `cargo clippy --workspace --all-targets -- -D warnings` in CI enforces it.
+[workspace.lints.rust]
+unsafe_code = "warn"
+
+[workspace.lints.clippy]
+# Bevy systems and the rally helpers legitimately take many ECS params;
+# a blanket allow here is clearer than an attribute on a dozen functions.
+too_many_arguments = "allow"
