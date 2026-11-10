@@ -2,7 +2,8 @@
 //!
 //! Mirrors the JS exactly:
 //! - one set to 6 games (win by 2), 6–6 triggers tie-break to 7 (win by 2)
-//! - player serves every point (simplified controls)
+//! - service games alternate: you serve one game, the opponent the next;
+//!   in a tie-break the serve rotates 1 point, then every 2 points
 //! - deuce / advantage / umpire clip keys (`sunete/*.mp3`)
 //! - serve ace chance + return outcome math from `serve()` / `hit()`
 //!
@@ -213,13 +214,17 @@ pub struct PointResult {
     pub umpire: UmpireCall,
 }
 
-/// Whole-match state. Index 0 = player ("tu"/server), 1 = opponent.
+/// Whole-match state. Index 0 = player ("tu"/server when serving), 1 = opponent.
 #[derive(Debug, Clone)]
 pub struct Match {
     pub pts: [u32; 2],
     pub games: [u32; 2],
     pub sets: [u32; 2],
     pub tiebreak: bool,
+    /// Who serves the current *game* (0 = you, 1 = opponent). Flips after
+    /// every finished game. Inside a tie-break the point server rotates
+    /// (see [`Match::current_server`]) starting from this holder.
+    pub server: usize,
     pub phase: Phase,
     pub dir: Dir,
     pub shot: Shot,
@@ -240,6 +245,7 @@ impl Match {
             games: [0, 0],
             sets: [0, 0],
             tiebreak: false,
+            server: 0,
             phase: Phase::Ready,
             dir: 0,
             shot: Shot::Flat,
@@ -264,10 +270,63 @@ impl Match {
         self.shot = shot;
     }
 
-    /// Romanian score line. Mirrors `scoreText()` in index.html.
+    /// Who serves the next point: the game holder, except inside a
+    /// tie-break where the serve rotates — first point by the game
+    /// holder, then 2 points each, alternating (ITF rule).
+    pub fn current_server(&self) -> usize {
+        if !self.tiebreak {
+            return self.server;
+        }
+        let played = self.pts[0] + self.pts[1];
+        if played == 0 {
+            return self.server;
+        }
+        if ((played - 1) / 2) % 2 == 0 {
+            1 - self.server
+        } else {
+            self.server
+        }
+    }
+
+    pub fn is_player_serve(&self) -> bool {
+        self.current_server() == 0
+    }
+
+    /// Points with the server first: `(server_pts, receiver_pts)`.
+    /// Tennis announces the server's score first — "15-0" means the
+    /// server leads, whoever that is. In a tie-break `server` is the
+    /// holder (first server), a stable reference while points rotate.
+    pub fn ordered_pts(&self) -> (u32, u32) {
+        if self.server == 0 {
+            (self.pts[0], self.pts[1])
+        } else {
+            (self.pts[1], self.pts[0])
+        }
+    }
+
+    /// Where the server stands for the next point (deuce/ad court):
+    /// even points-in-game from the right, odd from the left — so the
+    /// stance itself is audible/visible before the serve.
+    pub fn serve_origin_lane(&self) -> Dir {
+        if (self.pts[0] + self.pts[1]) % 2 == 0 {
+            1
+        } else {
+            -1
+        }
+    }
+
+    /// Romanian score line. Mirrors `scoreText()` in index.html, except the
+    /// point score is server-first per tennis convention ("15-0" = the
+    /// server leads). Labels stay, so screen readers hear unambiguously
+    /// who has what, e.g. "Calculator 15, tu 0. Servește calculatorul."
     pub fn score_text_ro(&self) -> String {
+        let (s, r) = self.ordered_pts();
         let v = if self.tiebreak {
-            format!("Tie-break: tu {}, calculator {}", self.pts[0], self.pts[1])
+            if self.server == 0 {
+                format!("Tie-break: tu {s}, calculator {r}")
+            } else {
+                format!("Tie-break: calculator {s}, tu {r}")
+            }
         } else if self.pts[0] >= 3 && self.pts[1] >= 3 {
             if self.pts[0] == self.pts[1] {
                 "Egalitate".to_string()
@@ -276,24 +335,40 @@ impl Match {
             } else {
                 "Avantaj calculator".to_string()
             }
-        } else {
+        } else if self.server == 0 {
             format!(
                 "Tu {}, calculator {}",
-                POINT_NAMES_RO[self.pts[0].min(3) as usize],
-                POINT_NAMES_RO[self.pts[1].min(3) as usize]
+                POINT_NAMES_RO[s.min(3) as usize],
+                POINT_NAMES_RO[r.min(3) as usize]
+            )
+        } else {
+            format!(
+                "Calculator {}, tu {}",
+                POINT_NAMES_RO[s.min(3) as usize],
+                POINT_NAMES_RO[r.min(3) as usize]
             )
         };
+        let serve = if self.is_player_serve() {
+            "Servește tu"
+        } else {
+            "Servește calculatorul"
+        };
         format!(
-            "Seturi: tu {}, calculator {}. Game-uri: tu {}, calculator {}. {}.",
-            self.sets[0], self.sets[1], self.games[0], self.games[1], v
+            "Seturi: tu {}, calculator {}. Game-uri: tu {}, calculator {}. {}. {}.",
+            self.sets[0], self.sets[1], self.games[0], self.games[1], v, serve
         )
     }
 
-    /// English umpire call + clip. Mirrors `umpireScore()` in index.html.
+    /// English umpire call + clip. Mirrors `umpireScore()` in index.html,
+    /// except the score is server-first per tennis convention: the web
+    /// version always led with the player, who always served there.
+    /// Advantage and game/set/match clips are likewise relative to the
+    /// server of the point, not to the player.
     pub fn umpire_score(&self) -> UmpireCall {
         if self.tiebreak {
+            let (s, r) = self.ordered_pts();
             return UmpireCall {
-                text_en: format!("Tie break. {} to {}", self.pts[0], self.pts[1]),
+                text_en: format!("Tie break. {s} to {r}"),
                 clip_key: None, // generated vocally per CITESTE-MA / index.html notice
             };
         }
@@ -304,7 +379,8 @@ impl Match {
                     clip_key: Some("deuce".to_string()),
                 };
             }
-            if self.pts[0] > self.pts[1] {
+            let (s, r) = self.ordered_pts();
+            if s > r {
                 return UmpireCall {
                     text_en: "Advantage server".to_string(),
                     clip_key: Some("advantage-server".to_string()),
@@ -315,8 +391,9 @@ impl Match {
                 clip_key: Some("advantage-receiver".to_string()),
             };
         }
-        let x = POINT_NAMES_EN[self.pts[0].min(3) as usize];
-        let y = POINT_NAMES_EN[self.pts[1].min(3) as usize];
+        let (s, r) = self.ordered_pts();
+        let x = POINT_NAMES_EN[s.min(3) as usize];
+        let y = POINT_NAMES_EN[r.min(3) as usize];
         let (text_en, key) = if x == y {
             if x == "love" {
                 ("Love all".to_string(), "love-all".to_string())
@@ -332,9 +409,35 @@ impl Match {
         }
     }
 
+    /// TV-scoreboard point columns: `(player, opponent)` display strings —
+    /// "0"/"15"/"30"/"40", "AD" for the advantage holder, bare numbers
+    /// in a tie-break. Deuce shows "40"/"40", like broadcast graphics.
+    pub fn game_points_display(&self) -> (String, String) {
+        if self.tiebreak {
+            return (self.pts[0].to_string(), self.pts[1].to_string());
+        }
+        if self.pts[0] >= 3 && self.pts[1] >= 3 {
+            if self.pts[0] == self.pts[1] {
+                return ("40".to_string(), "40".to_string());
+            }
+            if self.pts[0] > self.pts[1] {
+                return ("AD".to_string(), "40".to_string());
+            }
+            return ("40".to_string(), "AD".to_string());
+        }
+        (
+            POINT_NAMES_RO[self.pts[0].min(3) as usize].to_string(),
+            POINT_NAMES_RO[self.pts[1].min(3) as usize].to_string(),
+        )
+    }
+
     /// Score a finished point. Mirrors `point(winner, reason)` in index.html.
     pub fn score_point(&mut self, winner: usize, reason_ro: &str) -> PointResult {
         debug_assert!(winner <= 1);
+        // Who served the point just played — the reference for
+        // server-relative umpire clips below. Captured before the score
+        // changes it (tie-break rotation depends on points played).
+        let point_server = self.current_server();
         self.pts[winner] += 1;
         let mut msg = format!("{reason_ro}. ");
         let (mut game_won, mut set_won) = (false, false);
@@ -362,6 +465,8 @@ impl Match {
             } else {
                 "Game pentru calculator. "
             };
+            // Alternate the service game, like real tennis.
+            self.server = 1 - self.server;
             if self.games[winner] >= 6
                 && self.games[winner].saturating_sub(self.games[1 - winner]) >= 2
             {
@@ -387,7 +492,7 @@ impl Match {
             UmpireCall {
                 text_en: "Game, set and match".to_string(),
                 clip_key: Some(
-                    if winner == 0 {
+                    if winner == point_server {
                         "match-server"
                     } else {
                         "match-receiver"
@@ -399,7 +504,7 @@ impl Match {
             UmpireCall {
                 text_en: "Game".to_string(),
                 clip_key: Some(
-                    if winner == 0 {
+                    if winner == point_server {
                         "game-server"
                     } else {
                         "game-receiver"
@@ -413,7 +518,11 @@ impl Match {
 
         msg += &self.score_text_ro();
         if self.phase == Phase::Ready {
-            msg += " Apasă S pentru serviciu.";
+            msg += if self.is_player_serve() {
+                " Apasă S pentru serviciu."
+            } else {
+                " Adversarul servește."
+            };
         }
         self.history_ro = msg.clone();
 
@@ -429,6 +538,27 @@ impl Match {
     /// Serve ace? `roll` in [0,1). Mirrors the ace check in `serve()`.
     pub fn serve_is_ace(difficulty: Difficulty, roll: f32) -> bool {
         roll < difficulty.ace_chance()
+    }
+
+    /// Ace chance for whoever serves this point. Your serve is the classic
+    /// `ace_chance` (Hard reads serves well, so free aces are rare); the
+    /// opponent's serve mirrors it — on Hard his delivery is just as hard
+    /// for you to read as yours is easy for him to read on Easy.
+    pub fn serve_ace_chance_for(server: usize, difficulty: Difficulty) -> f32 {
+        if server == 0 {
+            difficulty.ace_chance()
+        } else {
+            match difficulty {
+                Difficulty::Easy => 0.035,
+                Difficulty::Normal => 0.08,
+                Difficulty::Hard => 0.13,
+            }
+        }
+    }
+
+    /// Opponent's serve ace against you? `roll` in [0,1).
+    pub fn opponent_serve_is_ace(difficulty: Difficulty, roll: f32) -> bool {
+        roll < Self::serve_ace_chance_for(1, difficulty)
     }
 
     /// Timing quality from `hit()`: ms since the "LOVEȘTE ACUM" cue.
@@ -702,7 +832,9 @@ mod tests {
         let r = m.score_point(0, "Punct câștigat");
         assert!(r.set_won && r.match_finished);
         assert_eq!(m.sets, [1, 0]);
-        assert_eq!(r.umpire.clip_key.as_deref(), Some("match-server"));
+        // 11th point of the tie-break is served by the opponent (rotation),
+        // so the player wins it as receiver.
+        assert_eq!(r.umpire.clip_key.as_deref(), Some("match-receiver"));
     }
 
     #[test]
@@ -754,15 +886,155 @@ mod tests {
     }
 
     #[test]
-    fn all_umpire_clip_keys_have_files() {        let mut m = Match::new();
+    fn service_games_alternate() {
+        let mut m = Match::new();
+        assert_eq!(m.current_server(), 0);
+        assert!(m.is_player_serve());
+        // Win the first game: server flips to the opponent.
+        m.pts = [3, 0];
+        let r = m.score_point(0, "Punct");
+        assert!(r.game_won);
+        assert_eq!(m.server, 1);
+        assert_eq!(m.current_server(), 1);
+        assert!(!m.is_player_serve());
+        assert!(r.message_ro.contains("Adversarul servește"));
+        assert!(m.score_text_ro().contains("Servește calculatorul"));
+        // Opponent holds: back to you.
+        m.pts = [0, 3];
+        let r = m.score_point(1, "Punct");
+        assert!(r.game_won);
+        assert_eq!(m.server, 0);
+        assert!(r.message_ro.contains("Apasă S pentru serviciu"));
+    }
+
+    #[test]
+    fn tiebreak_serve_rotates_one_then_two() {
+        let mut m = Match::new();
+        m.tiebreak = true;
+        m.server = 0;
+        // points played -> next server: 0:A 1:B 2:B 3:A 4:A 5:B 6:B 7:A
+        let expect = [0, 1, 1, 0, 0, 1, 1, 0];
+        for (played, want) in expect.iter().enumerate() {
+            // deal `played` points arbitrarily, then check the next server
+            m.pts = [0, 0];
+            for i in 0..played {
+                m.pts[i % 2] += 1;
+            }
+            assert_eq!(m.current_server(), *want, "played={played}");
+        }
+    }
+
+    #[test]
+    fn tv_points_columns() {
+        let mut m = Match::new();
+        assert_eq!(m.game_points_display(), ("0".to_string(), "0".to_string()));
+        m.pts = [1, 2];
+        assert_eq!(m.game_points_display(), ("15".to_string(), "30".to_string()));
+        m.pts = [3, 3];
+        assert_eq!(m.game_points_display(), ("40".to_string(), "40".to_string()));
+        m.pts = [4, 3];
+        assert_eq!(m.game_points_display(), ("AD".to_string(), "40".to_string()));
+        m.pts = [3, 4];
+        assert_eq!(m.game_points_display(), ("40".to_string(), "AD".to_string()));
+        m.tiebreak = true;
+        m.pts = [5, 6];
+        assert_eq!(m.game_points_display(), ("5".to_string(), "6".to_string()));
+    }
+
+    #[test]
+    fn score_is_server_first() {
+        // You serve, you lead 15-0: unchanged from before.
+        let mut m = Match::new();
+        m.pts = [1, 0];
+        assert!(m.score_text_ro().contains("Tu 15, calculator 0"));
+        let u = m.umpire_score();
+        assert_eq!(u.text_en, "fifteen love");
+        assert_eq!(u.clip_key.as_deref(), Some("fifteen-love"));
+        // He serves, he leads 15-0: "15-0" is HIS 15.
+        m.server = 1;
+        m.pts = [0, 1];
+        assert!(m.score_text_ro().contains("Calculator 15, tu 0"));
+        let u = m.umpire_score();
+        assert_eq!(u.text_en, "fifteen love");
+        assert_eq!(u.clip_key.as_deref(), Some("fifteen-love"));
+        // He serves, you lead 15-0: umpire names the receiver's score last.
+        m.pts = [1, 0];
+        assert!(m.score_text_ro().contains("Calculator 0, tu 15"));
+        let u = m.umpire_score();
+        assert_eq!(u.text_en, "love fifteen");
+        assert_eq!(u.clip_key.as_deref(), Some("love-fifteen"));
+        // Advantage is relative to whoever serves, not to you.
+        m.pts = [3, 4];
+        assert_eq!(m.umpire_score().clip_key.as_deref(), Some("advantage-server"));
+        m.pts = [4, 3];
+        assert_eq!(
+            m.umpire_score().clip_key.as_deref(),
+            Some("advantage-receiver")
+        );
+        // Tie-break numbers lead with the holder (first server) too.
+        m.tiebreak = true;
+        m.pts = [2, 3];
+        assert!(m.score_text_ro().contains("Tie-break: calculator 3, tu 2"));
+        assert_eq!(m.umpire_score().text_en, "Tie break. 3 to 2");
+    }
+
+    #[test]
+    fn game_clips_follow_point_server() {
+        // He serves and holds: the SERVER won the game.
+        let mut m = Match::new();
+        m.server = 1;
+        m.pts = [1, 3];
+        let r = m.score_point(1, "Punct");
+        assert!(r.game_won);
+        assert_eq!(r.umpire.clip_key.as_deref(), Some("game-server"));
+        // He serves and you break him: the RECEIVER won the game.
+        let mut m = Match::new();
+        m.server = 1;
+        m.pts = [3, 0];
+        let r = m.score_point(0, "Punct");
+        assert!(r.game_won);
+        assert_eq!(r.umpire.clip_key.as_deref(), Some("game-receiver"));
+        assert!(r.message_ro.contains("Apasă S pentru serviciu"));
+    }
+
+    #[test]
+    fn opponent_ace_mirrors_player_ace() {
+        // Hard opponent aces you as often as Easy you aces him.
+        assert!(Match::opponent_serve_is_ace(Difficulty::Hard, 0.12));
+        assert!(!Match::opponent_serve_is_ace(Difficulty::Hard, 0.14));
+        assert!(Match::opponent_serve_is_ace(Difficulty::Easy, 0.03));
+        assert!(!Match::opponent_serve_is_ace(Difficulty::Easy, 0.04));
+        assert_eq!(
+            Match::serve_ace_chance_for(0, Difficulty::Easy),
+            Difficulty::Easy.ace_chance()
+        );
+        assert_eq!(Match::serve_ace_chance_for(1, Difficulty::Hard), 0.13);
+    }
+
+    #[test]
+    fn serve_origin_alternates_deuce_ad() {
+        let mut m = Match::new();
+        assert_eq!(m.serve_origin_lane(), 1);
+        m.pts = [1, 0];
+        assert_eq!(m.serve_origin_lane(), -1);
+        m.pts = [1, 1];
+        assert_eq!(m.serve_origin_lane(), 1);
+    }
+    #[test]
+    fn all_umpire_clip_keys_have_files() {
+        let mut m = Match::new();
         // Sweep representative scorelines; every non-tiebreak key must map to a file.
-        for a in 0..5 {
-            for b in 0..5 {
-                m.pts = [a, b];
-                m.tiebreak = false;
-                let u = m.umpire_score();
-                let key = u.clip_key.expect("non-tiebreak needs a clip");
-                assert!(clip_filename(&key).is_some(), "missing file for {key}");
+        // Both service orders: server-first reordering must never invent a key.
+        for server in [0, 1] {
+            m.server = server;
+            for a in 0..5 {
+                for b in 0..5 {
+                    m.pts = [a, b];
+                    m.tiebreak = false;
+                    let u = m.umpire_score();
+                    let key = u.clip_key.expect("non-tiebreak needs a clip");
+                    assert!(clip_filename(&key).is_some(), "missing file for {key}");
+                }
             }
         }
         for key in ["game-server", "game-receiver", "match-server", "match-receiver"] {

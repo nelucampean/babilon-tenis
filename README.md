@@ -55,6 +55,10 @@ Needs a display + audio (desktop). First keypress unlocks audio, same as web.
   phase, mode/difficulty/volumes line, key help. The only world-space
   text is the BABILON OPEN banner — no labels over the court, athletes
   stay readable by color (galben = tu, roșu = adversar) and sound.
+- TV score bug, top-left over the free background: serve square + TU/CPU
+  rows with SET / GAME / PCT columns (gold square = server, AD/40/tie-break
+  numbers like the broadcasts). Visual only for screen readers — the same
+  score lives in the right panel's browsable label, so no extra tab stop.
 - Typeface: bundled Inter Regular + Bold (`assets/fonts/`, OFL) with full
   ș/ț/ă/â/î coverage verified via fontconfig — identical rendering on
   Linux / Windows / macOS / mobile, no system-font roulette.

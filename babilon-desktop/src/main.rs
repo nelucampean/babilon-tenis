@@ -31,6 +31,12 @@ struct Tennis {
     paused: bool,
     status_ro: String,
     hit_window: Option<Timer>,
+    /// Countdown between the opponent's position signal and his serve
+    /// flight. `None` outside opponent service games.
+    opp_serve_timer: Option<Timer>,
+    /// Serve stance + target lanes announced for the opponent's serve.
+    opp_serve_origin: Dir,
+    opp_serve_target: Dir,
 }
 
 impl Tennis {
@@ -87,6 +93,9 @@ enum FlightAfter {
     ServeLanded,
     IncomingLanded,
     ReturnLanded,
+    /// Opponent's serve flight landing on your side. Ace check happens
+    /// here (point to him) — otherwise it becomes your HIT cue.
+    OpponentServeLanded,
     /// Visual epilogue: your ball sails long/wide after the OUT call.
     /// The point was already scored at takeoff; landing just parks the ball.
     OutLanded,
@@ -115,6 +124,28 @@ struct ShotText;
 struct PhaseText;
 #[derive(Component)]
 struct ModeText;
+
+/// TV scoreboard cell (top-left broadcast bug): row 0 = you, row 1 = CPU.
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+struct SbCell {
+    row: u8,
+    col: SbCol,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SbCol {
+    /// Serve indicator square (a `BackgroundColor` node, no text).
+    Serve,
+    Sets,
+    Games,
+    Points,
+}
+
+/// Root of the TV scoreboard overlay. Carries a non-focusable
+/// screen-reader label with the same score, so the bug stays a visual
+/// convenience without adding a tab stop to the focus order.
+#[derive(Component)]
+struct SbRoot;
 
 /// Y of the net visual (see `setup`: net sprite at y=20). A return swing is
 /// only legal once the ball is past it, on your side.
@@ -237,6 +268,134 @@ struct InfoPanel {
 
 fn set_node_value(node: &mut AccessibilityNode, text: &str) {
     node.set_value(text.to_string().into_boxed_str());
+}
+
+// ---- TV scoreboard (top-left broadcast bug) ---------------------------------
+
+/// All dynamic scoreboard strings, computed pure from the match so both
+/// the overlay and its screen-reader summary stay in sync. Row 0 = you.
+struct SbTexts {
+    serve_you: bool,
+    sets: [String; 2],
+    games: [String; 2],
+    points: [String; 2],
+    summary: String,
+}
+
+fn scoreboard_texts(m: &Match) -> SbTexts {
+    let (pp, cp) = m.game_points_display();
+    let serve_you = m.is_player_serve();
+    let summary = format!(
+        "Tabela: TU seturi {}, game-uri {}, puncte {}; CPU seturi {}, game-uri {}, puncte {}; servește {}.",
+        m.sets[0],
+        m.games[0],
+        pp,
+        m.sets[1],
+        m.games[1],
+        cp,
+        if serve_you { "TU" } else { "CPU" },
+    );
+    SbTexts {
+        serve_you,
+        sets: [m.sets[0].to_string(), m.sets[1].to_string()],
+        games: [m.games[0].to_string(), m.games[1].to_string()],
+        points: [pp, cp],
+        summary,
+    }
+}
+
+fn sb_header_cell(
+    parent: &mut RelatedSpawnerCommands<ChildOf>,
+    fonts: &UiFonts,
+    muted: Color,
+    text: &str,
+    w: f32,
+) {
+    parent.spawn((
+        Node {
+            width: Val::Px(w),
+            justify_content: JustifyContent::Center,
+            ..default()
+        },
+        Text::new(text),
+        TextFont {
+            font: fonts.regular.clone(),
+            font_size: 10.0,
+            ..default()
+        },
+        TextColor(muted),
+    ));
+}
+
+/// One scoreboard row: serve square + name + SET/GAME/PCT cells.
+fn sb_row(
+    parent: &mut RelatedSpawnerCommands<ChildOf>,
+    fonts: &UiFonts,
+    ink: Color,
+    dim: Color,
+    row: u8,
+    name: &str,
+    serving: bool,
+) {
+    parent
+        .spawn(Node {
+            flex_direction: FlexDirection::Row,
+            column_gap: Val::Px(6.),
+            align_items: AlignItems::Center,
+            ..default()
+        })
+        .with_children(|r| {
+            r.spawn((
+                SbCell {
+                    row,
+                    col: SbCol::Serve,
+                },
+                Node {
+                    width: Val::Px(12.),
+                    height: Val::Px(12.),
+                    ..default()
+                },
+                BackgroundColor(if serving {
+                    Color::srgb(0.98, 0.79, 0.40)
+                } else {
+                    dim
+                }),
+            ));
+            r.spawn((
+                Node {
+                    width: Val::Px(64.),
+                    ..default()
+                },
+                Text::new(name),
+                TextFont {
+                    font: fonts.bold.clone(),
+                    font_size: 15.0,
+                    ..default()
+                },
+                TextColor(ink),
+            ));
+            for (col, w, init) in [
+                (SbCol::Sets, 36., "0"),
+                (SbCol::Games, 52., "0"),
+                (SbCol::Points, 56., "0"),
+            ] {
+                r.spawn((
+                    SbCell { row, col },
+                    Node {
+                        width: Val::Px(w),
+                        justify_content: JustifyContent::Center,
+                        ..default()
+                    },
+                    Text::new(init),
+                    TextFont {
+                        font: fonts.bold.clone(),
+                        font_size: 17.0,
+                        ..default()
+                    },
+                    TextColor(ink),
+                ));
+            }
+        });
 }
 
 fn spawn_sparks(
@@ -427,6 +586,9 @@ fn main() {
         paused: false,
         status_ro: "Meci nou. Apasă S pentru serviciu.".into(),
         hit_window: None,
+        opp_serve_timer: None,
+        opp_serve_origin: 1,
+        opp_serve_target: 0,
     })
     .insert_resource(Flight::default())
     .insert_resource(Targets {
@@ -452,6 +614,7 @@ fn main() {
             settings_keys,
             info_focus_keys,
             a11y_focus_requests,
+            opponent_serve_tick,
             drift_paddles,
             ball_flight,
             particle_fx,
@@ -669,9 +832,51 @@ fn setup(
     let shot_txt = "Direcție: centru • Lovitură: plată";
     let phase_txt = "PREGĂTIT PENTRU SERVICIU";
     let mode_txt = "Accesibil • Normal • Volum 100/100/65 • Stereo normal";
-    let help_txt = "S serviciu • Spațiu lovire\n←/→ direcție • 1/2/3 lovitură\nR repetă • P pauză • T test audio\nG dificultate • M mod audio • N stereo\nC grup volum • Z/X volum\nI focusează anunțurile (repetat = câmpul următor) • Esc înapoi la joc";
+    let help_txt = "S serviciu (când servești tu) • Spațiu lovire\n←/→ direcție • 1/2/3 lovitură\nR repetă • P pauză • T test audio\nG dificultate • M mod audio • N stereo\nC grup volum • Z/X volum\nI focusează anunțurile (repetat = câmpul următor) • Esc înapoi la joc";
     let mut order: Vec<Entity> = Vec::with_capacity(7);
     let mut info_status = Entity::PLACEHOLDER;
+    // TV-style score bug, top-left over the free background (never over the
+    // court): serve square + name + SET / GAME / PCT columns, like the
+    // broadcast graphics. You serve the first game, so your square starts lit.
+    let mut sb_node = accesskit::Node::new(Role::Label);
+    sb_node.set_label("Tabela de scor");
+    sb_node.set_value("Tabela: TU seturi 0, game-uri 0, puncte 0; CPU seturi 0, game-uri 0, puncte 0; servește TU.");
+    commands
+        .spawn((
+            SbRoot,
+            Node {
+                position_type: PositionType::Absolute,
+                left: Val::Px(12.),
+                top: Val::Px(12.),
+                flex_direction: FlexDirection::Column,
+                padding: UiRect::all(Val::Px(10.)),
+                row_gap: Val::Px(4.),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.02, 0.06, 0.11, 0.94)),
+            AccessibilityNode::from(sb_node),
+        ))
+        .with_children(|sb| {
+            sb.spawn(Node {
+                flex_direction: FlexDirection::Row,
+                column_gap: Val::Px(6.),
+                align_items: AlignItems::Center,
+                ..default()
+            })
+            .with_children(|h| {
+                h.spawn(Node {
+                    width: Val::Px(12.),
+                    ..default()
+                });
+                sb_header_cell(h, &fonts, muted, "", 64.);
+                sb_header_cell(h, &fonts, muted, "SET", 36.);
+                sb_header_cell(h, &fonts, muted, "GAME", 52.);
+                sb_header_cell(h, &fonts, muted, "PCT", 56.);
+            });
+            let dim = Color::srgba(0.45, 0.55, 0.60, 0.45);
+            sb_row(sb, &fonts, ink, dim, 0, "TU", true);
+            sb_row(sb, &fonts, ink, dim, 1, "CPU", false);
+        });
     commands
         .spawn(Node {
             width: Val::Percent(100.),
@@ -807,6 +1012,12 @@ fn do_serve(
     if tennis.m.phase != Phase::Ready {
         return;
     }
+    // Service games alternate: on his game the opponent serves himself —
+    // S is not your serve. The auto-signal system serves a beat later.
+    if !tennis.m.is_player_serve() {
+        tennis.announce("Adversarul servește. Pregătește-te!".into());
+        return;
+    }
     tennis.m.phase = Phase::Serve;
     targets.player_x = tennis.m.dir as f32 * LANE_STEP;
     poses.p_serve_until = now + 0.42;
@@ -874,13 +1085,234 @@ fn do_incoming(
     }
 }
 
-/// After a point, park the ball at the player so the next serve starts clean.
+/// After a point, park the ball at whoever serves next.
 /// Mirrors JS, where the ball hides and reappears at the server.
-fn reset_ball_to_player(transforms: &mut Query<&mut Transform>, ball: Entity, targets: &Targets) {
+fn reset_ball_to_server(
+    transforms: &mut Query<&mut Transform>,
+    ball: Entity,
+    targets: &Targets,
+    server: usize,
+) {
     if let Ok(mut b) = transforms.get_mut(ball) {
-        b.translation.x = targets.player_x;
-        b.translation.y = -260.0;
+        if server == 0 {
+            b.translation.x = targets.player_x;
+            b.translation.y = -260.0;
+        } else {
+            b.translation.x = targets.opp_x;
+            b.translation.y = 300.0;
+        }
         b.scale = Vec3::ONE;
+    }
+}
+
+/// Opponent's service game, part 1 — position signal.
+///
+/// Picks his stance (deuce/ad by points parity) and his target on your
+/// side, plants him visibly there, and tells you BEFORE he hits: THREE
+/// lower-octave lane bips panned at his feet (one now, two more at
+/// +0.4s/+0.8s — never confused with your own blip) plus "Adversarul
+/// servește de la …". The flight itself starts ~1.2s later in
+/// [`fire_opponent_serve`], announced like any incoming ball, so you get
+/// stance and trajectory as two spaced cues.
+#[allow(clippy::too_many_arguments)]
+fn start_opponent_serve_signal(
+    sfx: Option<&Sfx>,
+    vols: &Volumes,
+    tennis: &mut Tennis,
+    targets: &mut Targets,
+    poses: &mut Poses,
+    now: f32,
+    pending: &mut Pending,
+    ball: Entity,
+    transforms: &mut Query<&mut Transform>,
+) {
+    use babilon_core::dir_label_ro;
+    let origin = tennis.m.serve_origin_lane();
+    let player_lane = (targets.player_x / LANE_STEP).round() as i8;
+    let target = Match::pick_incoming_side(
+        tennis.difficulty,
+        player_lane,
+        rand::thread_rng().gen(),
+    );
+    tennis.m.incoming_side = target;
+    tennis.opp_serve_origin = origin;
+    tennis.opp_serve_target = target;
+    tennis.m.phase = Phase::Serve;
+    targets.opp_x = origin as f32 * LANE_STEP;
+    poses.o_swing_until = now + 1.2;
+    // Park the ball at his racket now; drift/skating won't touch it
+    // mid-signal because the phase is Serve, not Ready.
+    if let Ok(mut b) = transforms.get_mut(ball) {
+        b.translation.x = targets.opp_x;
+        b.translation.y = 300.0;
+        b.scale = Vec3::ONE;
+    }
+    tennis.announce(format!(
+        "Adversarul servește de la {}. Pregătește-te!",
+        dir_label_ro(origin)
+    ));
+    // 3-bip countdown to his serve: one now, two scheduled. Same lane
+    // coding as the O-key locator, panned at his feet.
+    let pan = origin as f32 / MAX_DIR as f32;
+    Sfx::synth(sfx, Synth::Foe(origin), pan, vols.ball);
+    pending.0.push(audio::Scheduled {
+        at: now + 0.4,
+        kind: Synth::Foe(origin),
+        pan,
+        vol: vols.ball,
+    });
+    pending.0.push(audio::Scheduled {
+        at: now + 0.8,
+        kind: Synth::Foe(origin),
+        pan,
+        vol: vols.ball,
+    });
+    tennis.opp_serve_timer = Some(Timer::from_seconds(1.2, TimerMode::Once));
+}
+
+/// Opponent's service game, part 2 — the serve flight.
+///
+/// Fired by [`opponent_serve_tick`] when the signal timer lapses: racket
+/// crack at his stance, then a full incoming-style flight to the
+/// pre-announced target lane. Landing resolves in `ball_flight` via
+/// [`FlightAfter::OpponentServeLanded`].
+#[allow(clippy::too_many_arguments)]
+fn fire_opponent_serve(
+    sfx: Option<&Sfx>,
+    vols: &Volumes,
+    mode: AudioMode,
+    pending: &mut Pending,
+    tennis: &mut Tennis,
+    targets: &mut Targets,
+    now: f32,
+    flight: &mut Flight,
+    ball: Entity,
+    transforms: &mut Query<&mut Transform>,
+) {
+    use babilon_core::dir_label_ro;
+    let origin = tennis.opp_serve_origin;
+    let target = tennis.opp_serve_target;
+    tennis.m.incoming_side = target;
+    targets.opp_x = origin as f32 * LANE_STEP;
+    tennis.announce(format!(
+        "Mingea vine spre {}. Pregătește-te!",
+        dir_label_ro(target)
+    ));
+    let pan = origin as f32 / MAX_DIR as f32;
+    Sfx::synth(sfx, Synth::Hit, pan, vols.ball);
+    if mode == AudioMode::Access {
+        pending.0.push(audio::Scheduled {
+            at: now + 0.49,
+            kind: Synth::Guide,
+            pan: target as f32 / MAX_DIR as f32,
+            vol: vols.ball,
+        });
+    }
+    if let Ok(t) = transforms.get(ball) {
+        start_flight(
+            flight,
+            Vec2::new(t.translation.x, t.translation.y),
+            Vec2::new(target as f32 * LANE_STEP, -240.0),
+            1.08,
+            FlightAfter::OpponentServeLanded,
+            Some(0.69),
+        );
+    }
+}
+
+/// Drives the opponent's service game: auto-starts his position signal
+/// when a Ready point comes up on his serve, then fires the serve when
+/// the signal timer lapses. Runs before `drift_paddles`/`ball_flight`.
+#[allow(clippy::too_many_arguments)]
+fn opponent_serve_tick(
+    time: Res<Time>,
+    mut tennis: ResMut<Tennis>,
+    mut targets: ResMut<Targets>,
+    mut poses: ResMut<Poses>,
+    vols: Res<Volumes>,
+    mode: Res<AudioMode>,
+    mut pending: ResMut<Pending>,
+    sfx: Option<Res<Sfx>>,
+    mut flight: ResMut<Flight>,
+    balls: Query<Entity, With<Ball>>,
+    mut transforms: Query<&mut Transform>,
+) {
+    if tennis.paused || tennis.m.phase == Phase::Finished {
+        return;
+    }
+    let sfx = sfx.as_deref();
+    if let Some(timer) = tennis.opp_serve_timer.as_mut() {
+        timer.tick(time.delta());
+        if timer.finished() {
+            tennis.opp_serve_timer = None;
+            if tennis.m.phase == Phase::Serve && !flight.active {
+                if let Ok(ball) = balls.single() {
+                    fire_opponent_serve(
+                        sfx,
+                        &vols,
+                        *mode,
+                        &mut pending,
+                        &mut tennis,
+                        &mut targets,
+                        time.elapsed_secs(),
+                        &mut flight,
+                        ball,
+                        &mut transforms,
+                    );
+                }
+            }
+        }
+        return;
+    }
+    // No signal in progress: start one when his serve comes up.
+    if tennis.m.phase == Phase::Ready && !flight.active && !tennis.m.is_player_serve() {
+        if let Ok(ball) = balls.single() {
+            start_opponent_serve_signal(
+                sfx,
+                &vols,
+                &mut tennis,
+                &mut targets,
+                &mut poses,
+                time.elapsed_secs(),
+                &mut pending,
+                ball,
+                &mut transforms,
+            );
+        }
+    }
+}
+
+/// Opponent-serve landing: a clean ace takes the point at once, otherwise
+/// the ball is live and you get the normal HIT cue.
+#[allow(clippy::too_many_arguments)]
+fn land_opponent_serve(
+    commands: &mut Commands,
+    sfx: Option<&Sfx>,
+    vols: &Volumes,
+    mode: AudioMode,
+    tennis: &mut Tennis,
+    targets: &Targets,
+    flight: &mut Flight,
+    ball: Entity,
+    transforms: &mut Query<&mut Transform>,
+    pa: &ParticleAssets,
+    particles: &mut Particles,
+) {
+    if Match::opponent_serve_is_ace(tennis.difficulty, rand::thread_rng().gen()) {
+        let r = tennis.m.score_point(1, "As! Serviciul adversarului te-a prins");
+        let msg = r.message_ro.clone();
+        tennis.announce(msg);
+        umpire_call(sfx, vols, &r.umpire);
+        Sfx::synth(sfx, Synth::Bad, 0.0, vols.ball);
+        if rand::thread_rng().gen::<f32>() < 0.40 {
+            Sfx::clip(sfx, "reaction", 0.0, vols.crowd);
+        }
+        spawn_sparks(commands, pa, particles, flight.to, true, 7);
+        flight.active = false;
+        let server = tennis.m.current_server();
+        reset_ball_to_server(transforms, ball, targets, server);
+    } else {
+        land_incoming(sfx, vols, mode, tennis);
     }
 }
 
@@ -911,7 +1343,8 @@ fn land_serve(
         Sfx::synth(sfx, Synth::Good, 0.0, vols.ball);
         spawn_sparks(commands, pa, particles, flight.to, true, 7);
         flight.active = false;
-        reset_ball_to_player(transforms, ball, targets);
+        let server = tennis.m.current_server();
+        reset_ball_to_server(transforms, ball, targets, server);
     } else {
         do_incoming(tennis, targets, poses, now, mode, vols, pending, flight, ball, transforms);
     }
@@ -982,7 +1415,8 @@ fn land_return(
                 Sfx::synth(sfx, Synth::Good, 0.0, vols.ball);
                 spawn_sparks(commands, pa, particles, flight.to, true, 7);
                 flight.active = false;
-                reset_ball_to_player(transforms, ball, targets);
+                let server = tennis.m.current_server();
+                reset_ball_to_server(transforms, ball, targets, server);
             } else if outcome == RallyOutcome::Out {
                 // Takeoff gets ONLY the line call + flight noise. The score,
                 // umpire and jingles wait for the landing — otherwise the
@@ -1060,7 +1494,8 @@ fn do_hit(
         }
         Phase::Incoming => {
             if !(flight.active
-                && flight.after == FlightAfter::IncomingLanded
+                && (flight.after == FlightAfter::IncomingLanded
+                    || flight.after == FlightAfter::OpponentServeLanded)
                 && flight.duration > 0.0)
             {
                 tennis.announce("Mingea e în aer. Așteaptă.".into());
@@ -1078,7 +1513,11 @@ fn do_hit(
             Match::position_quality(dx)
         }
         Phase::Ready => {
-            tennis.announce("Apasă S pentru serviciu, apoi Spațiu la semnal.".into());
+            if tennis.m.is_player_serve() {
+                tennis.announce("Apasă S pentru serviciu, apoi Spațiu la semnal.".into());
+            } else {
+                tennis.announce("Adversarul servește. Pregătește-te!".into());
+            }
             return;
         }
         Phase::Serve | Phase::Return => {
@@ -1099,7 +1538,9 @@ fn do_hit(
         umpire_call(sfx, vols, &r.umpire);
         Sfx::synth(sfx, Synth::Bad, 0.0, vols.ball);
         flight.active = false;
-        reset_ball_to_player(transforms, ball, &targets);
+        // Whiff target deref: `targets` is `&mut Targets` here.
+        let server = tennis.m.current_server();
+        reset_ball_to_server(transforms, ball, &*targets, server);
         return;
     }
     tennis.hit_window = None;
@@ -1181,10 +1622,15 @@ fn keyboard(
         flight.active = false;
         if tennis.paused {
             tennis.hit_window = None;
+            tennis.opp_serve_timer = None;
             tennis.announce("Pauză. Apasă P pentru reluare.".into());
         } else {
             tennis.m.phase = Phase::Ready;
-            tennis.announce("Meci reluat. Apasă S pentru serviciu.".into());
+            if tennis.m.is_player_serve() {
+                tennis.announce("Meci reluat. Apasă S pentru serviciu.".into());
+            } else {
+                tennis.announce("Meci reluat. Adversarul servește.".into());
+            }
         }
         return;
     }
@@ -1437,13 +1883,18 @@ fn drift_paddles(
             o.translation.x += (opp_target - o.translation.x) * opp_k;
         }
     }
-    // Serve ball parked on your paddle: ←/→ in Ready phase moves the
-    // ball too, so the serve starts exactly where you stand.
+    // Serve ball parked at the server's paddle: ←/→ in Ready phase moves
+    // the ball too on your serve; on his serve it waits at his feet.
     if tennis.m.phase == Phase::Ready && !flight.active {
         if let Some(e) = ball {
             if let Ok(mut b) = transforms.get_mut(e) {
-                b.translation.x = targets.player_x;
-                b.translation.y = -260.0;
+                if tennis.m.is_player_serve() {
+                    b.translation.x = targets.player_x;
+                    b.translation.y = -260.0;
+                } else {
+                    b.translation.x = targets.opp_x;
+                    b.translation.y = 300.0;
+                }
                 b.scale = Vec3::ONE;
             }
         }
@@ -1516,6 +1967,7 @@ fn ball_flight(
             match after {
                 FlightAfter::ServeLanded => land_serve(&mut commands, sfx, &vols, *mode, &mut pending, &mut tennis, &mut targets, &mut poses, now, &mut flight, b, &mut transforms, &pa, &mut particles),
                 FlightAfter::IncomingLanded => land_incoming(sfx, &vols, *mode, &mut tennis),
+                FlightAfter::OpponentServeLanded => land_opponent_serve(&mut commands, sfx, &vols, *mode, &mut tennis, &targets, &mut flight, b, &mut transforms, &pa, &mut particles),
                 FlightAfter::ReturnLanded => {
                     land_return(&mut commands, sfx, &vols, *mode, &mut pending, &mut tennis, &mut targets, &mut poses, now, &mut flight, b, &mut transforms, &pa, &mut particles);
                 }
@@ -1531,7 +1983,8 @@ fn ball_flight(
                     if rand::thread_rng().gen::<f32>() < 0.40 {
                         Sfx::clip(sfx, "reaction", 0.0, vols.crowd);
                     }
-                    reset_ball_to_player(&mut transforms, b, &targets);
+                    let server = tennis.m.current_server();
+                    reset_ball_to_server(&mut transforms, b, &targets, server);
                     if tennis.m.phase != Phase::Finished {
                         tennis.m.phase = Phase::Ready;
                     }
@@ -1548,7 +2001,8 @@ fn ball_flight(
                     if rand::thread_rng().gen::<f32>() < 0.40 {
                         Sfx::clip(sfx, "reaction", 0.0, vols.crowd);
                     }
-                    reset_ball_to_player(&mut transforms, b, &targets);
+                    let server = tennis.m.current_server();
+                    reset_ball_to_server(&mut transforms, b, &targets, server);
                     if tennis.m.phase != Phase::Finished {
                         tennis.m.phase = Phase::Ready;
                     }
@@ -1668,7 +2122,8 @@ fn hit_timeout(
         Sfx::synth(sfx, Synth::Bad, 0.0, vols.ball);
         // park ball for the next serve (was left mid-court)
         if let Ok(ball) = balls.single() {
-            reset_ball_to_player(&mut transforms, ball, &targets);
+            let server = tennis.m.current_server();
+            reset_ball_to_server(&mut transforms, ball, &targets, server);
         }
     }
 }
@@ -1697,6 +2152,9 @@ fn refresh_ui(
     mut shot_q: Query<(&mut Text, Option<&mut AccessibilityNode>), (With<ShotText>, Without<ScoreText>, Without<StatusText>)>,
     mut phase_q: Query<(&mut Text, Option<&mut AccessibilityNode>), (With<PhaseText>, Without<ScoreText>, Without<StatusText>, Without<ShotText>)>,
     mut mode_q: Query<(&mut Text, Option<&mut AccessibilityNode>), (With<ModeText>, Without<ScoreText>, Without<StatusText>, Without<ShotText>, Without<PhaseText>)>,
+    mut sb_text_q: Query<(&mut Text, &SbCell), (Without<ScoreText>, Without<StatusText>, Without<ShotText>, Without<PhaseText>, Without<ModeText>)>,
+    mut sb_dot_q: Query<(&mut BackgroundColor, &SbCell)>,
+    mut sb_root_q: Query<&mut AccessibilityNode, (With<SbRoot>, Without<ScoreText>, Without<StatusText>, Without<ShotText>, Without<PhaseText>, Without<ModeText>)>,
 ) {
     if !tennis.is_changed() && !vols.is_changed() && !mode.is_changed() {
         return;
@@ -1764,6 +2222,38 @@ fn refresh_ui(
             refresh_box(&mut node, "Mod audio și volum", &mode_line, false);
         }
     }
+    // TV scoreboard cells + screen-reader summary (same gate as the rest).
+    let sb = scoreboard_texts(&tennis.m);
+    for (mut t, cell) in &mut sb_text_q {
+        let v = match (cell.row, cell.col) {
+            (0, SbCol::Sets) => &sb.sets[0],
+            (1, SbCol::Sets) => &sb.sets[1],
+            (0, SbCol::Games) => &sb.games[0],
+            (1, SbCol::Games) => &sb.games[1],
+            (0, SbCol::Points) => &sb.points[0],
+            (1, SbCol::Points) => &sb.points[1],
+            _ => continue,
+        };
+        **t = v.clone();
+    }
+    for (mut bg, cell) in &mut sb_dot_q {
+        if cell.col != SbCol::Serve {
+            continue;
+        }
+        let serving = (cell.row == 0) == sb.serve_you;
+        *bg = BackgroundColor(if serving {
+            Color::srgb(0.98, 0.79, 0.40)
+        } else {
+            Color::srgba(0.45, 0.55, 0.60, 0.45)
+        });
+    }
+    for mut node in &mut sb_root_q {
+        // Label role, no Focus action: browsable like the panel Region's
+        // block, but never a tab stop — the right panel owns the focus order.
+        node.set_role(Role::Label);
+        node.set_label("Tabela de scor".to_string().into_boxed_str());
+        set_node_value(&mut node, &sb.summary);
+    }
 }
 
 #[cfg(test)]
@@ -1801,6 +2291,9 @@ mod smoke {
             paused: false,
             status_ro: String::new(),
             hit_window: None,
+            opp_serve_timer: None,
+            opp_serve_origin: 1,
+            opp_serve_target: 0,
         });
         app.insert_resource(Flight::default());
         app.insert_resource(Targets {
@@ -1840,6 +2333,7 @@ mod smoke {
                 settings_keys,
                 info_focus_keys,
                 a11y_focus_requests,
+                opponent_serve_tick,
                 drift_paddles,
                 ball_flight,
                 particle_fx,
@@ -1880,6 +2374,7 @@ mod smoke {
         bevy::ecs::system::assert_is_system(settings_keys);
         bevy::ecs::system::assert_is_system(info_focus_keys);
         bevy::ecs::system::assert_is_system(a11y_focus_requests);
+        bevy::ecs::system::assert_is_system(opponent_serve_tick);
         bevy::ecs::system::assert_is_system(drift_paddles);
         bevy::ecs::system::assert_is_system(ball_flight);
         bevy::ecs::system::assert_is_system(particle_fx);
@@ -2081,6 +2576,17 @@ mod smoke {
         // fast-forward the return flight to the rally resolution
         app.world_mut().resource_mut::<Flight>().t = 100.0;
         app.update();
+        // OUT / countered take a short visual epilogue flight before the
+        // point is scored — follow it to its landing too (but leave a
+        // continued rally's fresh incoming flight alone).
+        let is_epilogue = matches!(
+            app.world().resource::<Flight>().after,
+            FlightAfter::OutLanded | FlightAfter::CounterLanded
+        );
+        if is_epilogue && app.world().resource::<Flight>().active {
+            app.world_mut().resource_mut::<Flight>().t = 100.0;
+            app.update();
+        }
         // Point scored either way, or the rally continues — but never a
         // silent miss while we hit on time.
         let t = app.world().resource::<Tennis>();
@@ -2135,6 +2641,17 @@ mod smoke {
         // Landing resolves without panic; point or continued rally.
         app.world_mut().resource_mut::<Flight>().t = 100.0;
         app.update();
+        // OUT / countered take a short visual epilogue flight before the
+        // point is scored — follow it to its landing too (but leave a
+        // continued rally's fresh incoming flight alone).
+        let is_epilogue = matches!(
+            app.world().resource::<Flight>().after,
+            FlightAfter::OutLanded | FlightAfter::CounterLanded
+        );
+        if is_epilogue && app.world().resource::<Flight>().active {
+            app.world_mut().resource_mut::<Flight>().t = 100.0;
+            app.update();
+        }
         let t = app.world().resource::<Tennis>();
         let scored = t.m.pts[0] + t.m.pts[1] == 1;
         let continued = t.m.phase == Phase::Incoming;
@@ -2191,5 +2708,197 @@ mod smoke {
         }
         app.update();
         assert_eq!(app.world().resource::<Tennis>().m.phase, Phase::Finished);
+    }
+
+    #[test]
+    fn opponent_serve_signals_stance_before_flight() {
+        // His service game: entering Ready auto-starts a position signal —
+        // stance announced + 3-bip countdown, ball at his racket, flight
+        // only after the timer.
+        let mut app = test_app();
+        app.world_mut().resource_mut::<Tennis>().m.server = 1;
+        assert!(!app.world().resource::<Tennis>().m.is_player_serve());
+        app.update();
+        let t = app.world().resource::<Tennis>();
+        assert_eq!(t.m.phase, Phase::Serve);
+        assert!(
+            t.status_ro.contains("Adversarul servește de la"),
+            "stance not signaled: {}",
+            t.status_ro
+        );
+        assert!(t.opp_serve_timer.is_some(), "no signal timer");
+        assert!(
+            !app.world().resource::<Flight>().active,
+            "flight must wait for the signal timer"
+        );
+        // 3-bip countdown: one immediate synth + two scheduled at +0.4/+0.8s.
+        assert_eq!(
+            app.world().resource::<Pending>().0.len(),
+            2,
+            "expected two scheduled countdown bips"
+        );
+        // Ball waits at his feet, on his side of the net.
+        let (bx, by) = ball_xy(&mut app);
+        assert!(by > 200.0, "ball not at server: ({bx}, {by})");
+        assert_eq!(bx, app.world().resource::<Targets>().opp_x);
+    }
+
+    #[test]
+    fn opponent_serve_fire_leads_to_hit_or_ace() {
+        // Signal -> timer lapses -> serve flight -> landing resolves to
+        // either your HIT cue or his ace, never a stuck Serve.
+        let mut app = test_app();
+        app.world_mut().resource_mut::<Tennis>().m.server = 1;
+        app.update(); // auto-signal
+        assert_eq!(app.world().resource::<Tennis>().m.phase, Phase::Serve);
+        // Expire the 1.2s signal wait at once (headless frames tick ms).
+        app.world_mut()
+            .resource_mut::<Tennis>()
+            .opp_serve_timer = Some(Timer::from_seconds(0.0, TimerMode::Once));
+        app.update(); // fires the serve
+        {
+            let f = app.world().resource::<Flight>();
+            assert!(f.active, "serve never fired");
+            assert_eq!(f.after, FlightAfter::OpponentServeLanded);
+        }
+        // Fast-forward the serve flight to its landing.
+        app.world_mut().resource_mut::<Flight>().t = 100.0;
+        app.update();
+        let t = app.world().resource::<Tennis>();
+        if t.m.phase == Phase::Hit {
+            assert!(t.hit_window.is_some(), "HIT cue without a window");
+            assert!(t.status_ro.contains("lovește"), "no HIT call: {}", t.status_ro);
+        } else {
+            // Ace (8% on Normal): point to him, parked, ready again.
+            assert_eq!(t.m.pts, [0, 1], "phase={:?} pts={:?}", t.m.phase, t.m.pts);
+            assert_eq!(t.m.phase, Phase::Ready);
+        }
+    }
+
+    #[test]
+    fn tv_scoreboard_texts_follow_server() {
+        // Start of match: you serve, everything zero.
+        let sb = scoreboard_texts(&Match::new());
+        assert!(sb.serve_you);
+        assert_eq!(sb.sets, ["0".to_string(), "0".to_string()]);
+        assert_eq!(sb.points, ["0".to_string(), "0".to_string()]);
+        assert!(sb.summary.contains("servește TU"), "{}", sb.summary);
+        // His serve, he leads 30-0: columns follow the match, dot flips.
+        let mut m = Match::new();
+        m.server = 1;
+        m.games = [2, 1];
+        m.pts = [0, 2];
+        let sb = scoreboard_texts(&m);
+        assert!(!sb.serve_you);
+        assert_eq!(sb.games, ["2".to_string(), "1".to_string()]);
+        assert_eq!(sb.points, ["0".to_string(), "30".to_string()]);
+        assert!(sb.summary.contains("servește CPU"), "{}", sb.summary);
+        assert!(sb.summary.contains("puncte 30"), "{}", sb.summary);
+        // Deuce and advantage render like the broadcast bug.
+        m.server = 0;
+        m.pts = [3, 3];
+        assert_eq!(scoreboard_texts(&m).points, ["40".to_string(), "40".to_string()]);
+        m.pts = [4, 3];
+        assert_eq!(scoreboard_texts(&m).points, ["AD".to_string(), "40".to_string()]);
+        // Tie-break shows bare numbers.
+        m.tiebreak = true;
+        m.pts = [5, 6];
+        assert_eq!(scoreboard_texts(&m).points, ["5".to_string(), "6".to_string()]);
+    }
+
+    fn col_name(c: SbCol) -> &'static str {
+        match c {
+            SbCol::Serve => "serve",
+            SbCol::Sets => "sets",
+            SbCol::Games => "games",
+            SbCol::Points => "points",
+        }
+    }
+
+    #[test]
+    fn tv_scoreboard_cells_update_without_conflict() {
+        // Spawn a minimal scoreboard (dots + value cells + labeled root)
+        // and run the real schedule: refresh_ui must fill every cell,
+        // light only the server's square, and never trip a query conflict.
+        let mut app = test_app();
+        {
+            let w = app.world_mut();
+            w.spawn((
+                SbCell { row: 0, col: SbCol::Serve },
+                BackgroundColor(Color::WHITE),
+            ));
+            w.spawn((
+                SbCell { row: 1, col: SbCol::Serve },
+                BackgroundColor(Color::WHITE),
+            ));
+            for row in [0u8, 1u8] {
+                for col in [SbCol::Sets, SbCol::Games, SbCol::Points] {
+                    w.spawn((SbCell { row, col }, Text::new("?")));
+                }
+            }
+            let mut node = accesskit::Node::new(Role::Label);
+            node.set_label("Tabela de scor");
+            w.spawn((SbRoot, AccessibilityNode::from(node)));
+        }
+        let mut m = Match::new();
+        m.server = 1;
+        m.games = [2, 1];
+        m.pts = [0, 2];
+        m.phase = Phase::Finished; // keep serve-tick/timeout systems quiet
+        app.world_mut().resource_mut::<Tennis>().m = m;
+        app.update();
+        let w = app.world_mut();
+        let mut q = w.query::<(&Text, &SbCell)>();
+        let mut seen = 0;
+        for (t, cell) in q.iter(w) {
+            let want = match (cell.row, cell.col) {
+                (0, SbCol::Sets) => "0",
+                (1, SbCol::Sets) => "0",
+                (0, SbCol::Games) => "2",
+                (1, SbCol::Games) => "1",
+                (0, SbCol::Points) => "0",
+                (1, SbCol::Points) => "30",
+                _ => continue,
+            };
+            assert_eq!(t.as_str(), want, "row={} col={}", cell.row, col_name(cell.col));
+            seen += 1;
+        }
+        assert_eq!(seen, 6, "not every scoreboard cell updated");
+        let w = app.world_mut();
+        let mut q = w.query::<(&BackgroundColor, &SbCell)>();
+        let mut dots = 0;
+        for (bg, cell) in q.iter(w) {
+            // Text cells carry an automatic transparent BackgroundColor —
+            // only the Serve squares count here.
+            if cell.col != SbCol::Serve {
+                continue;
+            }
+            let lit = bg.0 == Color::srgb(0.98, 0.79, 0.40);
+            assert_eq!(lit, cell.row == 1, "wrong serve square lit");
+            dots += 1;
+        }
+        assert_eq!(dots, 2, "serve squares missing");
+    }
+
+    #[test]
+    fn serve_key_does_not_steal_opponent_serve() {
+        // S on his game never starts YOUR serve flight — it waits for (or
+        // nudges) his signal instead.
+        let mut app = test_app();
+        app.world_mut().resource_mut::<Tennis>().m.server = 1;
+        press(&mut app, KeyCode::KeyS);
+        let t = app.world().resource::<Tennis>();
+        assert!(
+            t.status_ro.contains("Adversarul servește"),
+            "wrong S answer: {}",
+            t.status_ro
+        );
+        assert_eq!(t.m.pts, [0, 0], "S scored a point on his serve");
+        let f = app.world().resource::<Flight>();
+        // Either still signaling (no flight) or his serve flight is up —
+        // never your player-serve flight to y=+300 from the baseline.
+        if f.active {
+            assert_eq!(f.after, FlightAfter::OpponentServeLanded);
+        }
     }
 }
