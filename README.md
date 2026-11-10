@@ -69,6 +69,9 @@ Needs a display + audio (desktop). First keypress unlocks audio, same as web.
 ## How a rally plays
 
 - Serve with `S` from wherever you stand; the ball starts at your paddle.
+- On the opponent's serve you first get a quiet beat after the score, then
+  his stance call and a 3-bip, 2-second countdown before the ball — enough
+  time to hear the score and get ready.
 - The bot announces its lane ("Mingea vine spre …") and answers the side
   you're on — camp in one lane and it wrong-foots you to the far corner.
 - Answer only after the ball crosses the net ("Prea devreme" otherwise),

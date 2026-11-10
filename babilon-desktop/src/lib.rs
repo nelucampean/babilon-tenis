@@ -614,12 +614,28 @@ mod smoke {
 
     #[test]
     fn opponent_serve_signals_stance_before_flight() {
-        // His service game: entering Ready auto-starts a position signal —
-        // stance announced + 3-bip countdown, ball at his racket, flight
-        // only after the timer.
+        // His service game: entering Ready starts a quiet pause, then a
+        // position signal — stance announced + 3-bip countdown, ball at his
+        // racket, flight only after the countdown timer.
         let mut app = test_app();
         app.world_mut().resource_mut::<Tennis>().m.server = 1;
         assert!(!app.world().resource::<Tennis>().m.is_player_serve());
+        app.update();
+        let t = app.world().resource::<Tennis>();
+        assert_eq!(t.m.phase, Phase::Ready, "quiet pause not started");
+        assert!(t.opp_serve_wait.is_some(), "no pre-serve wait timer");
+        assert!(t.opp_serve_timer.is_none(), "signal started too early");
+        assert!(
+            !app.world()
+                .resource::<Announcer>()
+                .status_ro
+                .contains("Adversarul servește de la"),
+            "stance announcement cut off the score"
+        );
+
+        // Expire the quiet pause at once (headless frames tick ms).
+        app.world_mut().resource_mut::<Tennis>().opp_serve_wait =
+            Some(Timer::from_seconds(0.0, TimerMode::Once));
         app.update();
         let t = app.world().resource::<Tennis>();
         assert_eq!(t.m.phase, Phase::Serve);
@@ -632,11 +648,15 @@ mod smoke {
             app.world().resource::<Announcer>().status_ro
         );
         assert!(t.opp_serve_timer.is_some(), "no signal timer");
+        assert_eq!(
+            t.opp_serve_timer.as_ref().unwrap().duration().as_secs_f32(),
+            OPP_SERVE_COUNTDOWN
+        );
         assert!(
             !app.world().resource::<Flight>().active,
             "flight must wait for the signal timer"
         );
-        // 3-bip countdown: one immediate synth + two scheduled at +0.4/+0.8s.
+        // 3-bip countdown: one immediate synth + two evenly spaced.
         assert_eq!(
             app.world().resource::<Pending>().0.len(),
             2,
@@ -650,13 +670,16 @@ mod smoke {
 
     #[test]
     fn opponent_serve_fire_leads_to_hit_or_ace() {
-        // Signal -> timer lapses -> serve flight -> landing resolves to
-        // either your HIT cue or his ace, never a stuck Serve.
+        // Pause -> signal -> countdown lapses -> serve flight -> landing
+        // resolves to either your HIT cue or his ace, never a stuck Serve.
         let mut app = test_app();
         app.world_mut().resource_mut::<Tennis>().m.server = 1;
+        app.update(); // quiet pause
+        app.world_mut().resource_mut::<Tennis>().opp_serve_wait =
+            Some(Timer::from_seconds(0.0, TimerMode::Once));
         app.update(); // auto-signal
         assert_eq!(app.world().resource::<Tennis>().m.phase, Phase::Serve);
-        // Expire the 1.2s signal wait at once (headless frames tick ms).
+        // Expire the signal countdown at once (headless frames tick ms).
         app.world_mut().resource_mut::<Tennis>().opp_serve_timer =
             Some(Timer::from_seconds(0.0, TimerMode::Once));
         app.update(); // fires the serve

@@ -33,6 +33,7 @@ pub(crate) fn pause_key(
             next.set(AppState::Paused);
             flight.active = false;
             tennis.hit_window = None;
+            tennis.opp_serve_wait = None;
             tennis.opp_serve_timer = None;
             announce(&mut commands, "Pauză. Apasă P pentru reluare.");
         }

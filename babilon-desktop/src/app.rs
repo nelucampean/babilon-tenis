@@ -80,6 +80,7 @@ pub(crate) fn build_app(app: &mut App, settings: settings::Settings) {
         .insert_resource(Tennis {
             m: Match::new(),
             hit_window: None,
+            opp_serve_wait: None,
             opp_serve_timer: None,
             opp_serve_origin: 1,
             opp_serve_target: 0,

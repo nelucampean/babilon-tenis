@@ -21,6 +21,10 @@ use crate::text;
 pub(crate) struct Tennis {
     pub(crate) m: Match,
     pub(crate) hit_window: Option<Timer>,
+    /// Quiet pause after a point before the opponent starts his service
+    /// routine, so the score announcement can finish. `None` outside
+    /// opponent service games.
+    pub(crate) opp_serve_wait: Option<Timer>,
     /// Countdown between the opponent's position signal and his serve
     /// flight. `None` outside opponent service games.
     pub(crate) opp_serve_timer: Option<Timer>,
@@ -173,15 +177,22 @@ pub(crate) fn reset_ball_to_server(
     }
 }
 
+/// Quiet time after a point before the opponent starts his service routine,
+/// so the score announcement has time to finish.
+pub(crate) const OPP_SERVE_WAIT: f32 = 0.8;
+/// Countdown from the opponent's stance signal to his serve flight.
+pub(crate) const OPP_SERVE_COUNTDOWN: f32 = 2.0;
+
 /// Opponent's service game, part 1 — position signal.
 ///
 /// Picks his stance (deuce/ad by points parity) and his target on your
 /// side, plants him visibly there, and tells you BEFORE he hits: THREE
-/// lower-octave lane bips panned at his feet (one now, two more at
-/// +0.4s/+0.8s — never confused with your own blip) plus "Adversarul
-/// servește de la …". The flight itself starts ~1.2s later in
-/// [`fire_opponent_serve`], announced like any incoming ball, so you get
-/// stance and trajectory as two spaced cues.
+/// lower-octave lane bips panned at his feet (one now, then evenly spaced
+/// through the countdown — never confused with your own blip) plus
+/// "Adversarul servește de la …". The flight itself starts
+/// [`OPP_SERVE_COUNTDOWN`] seconds later in [`fire_opponent_serve`],
+/// announced like any incoming ball, so you get stance and trajectory as
+/// two spaced cues.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn start_opponent_serve_signal(
     commands: &mut Commands,
@@ -201,7 +212,7 @@ pub(crate) fn start_opponent_serve_signal(
     tennis.opp_serve_target = target;
     tennis.m.phase = Phase::Serve;
     targets.opp_x = origin as f32 * LANE_STEP;
-    poses.o_swing_until = now + 1.2;
+    poses.o_swing_until = now + OPP_SERVE_COUNTDOWN;
     // Park the ball at his racket now; drift/skating won't touch it
     // mid-signal because the phase is Serve, not Ready.
     if let Ok(mut b) = transforms.get_mut(ball) {
@@ -216,13 +227,14 @@ pub(crate) fn start_opponent_serve_signal(
             text::dir_label_ro(origin)
         ),
     );
-    // 3-bip countdown to his serve: one now, two scheduled. Same lane
+    // 3-bip countdown to his serve: one now, two evenly spaced. Same lane
     // coding as the O-key locator, panned at his feet.
     let pan = origin as f32 / MAX_DIR as f32;
     commands.synth(Synth::Foe(origin), pan, Bus::Ball);
-    commands.schedule(now + 0.4, Synth::Foe(origin), pan, Bus::Ball);
-    commands.schedule(now + 0.8, Synth::Foe(origin), pan, Bus::Ball);
-    tennis.opp_serve_timer = Some(Timer::from_seconds(1.2, TimerMode::Once));
+    let step = OPP_SERVE_COUNTDOWN / 3.0;
+    commands.schedule(now + step, Synth::Foe(origin), pan, Bus::Ball);
+    commands.schedule(now + step * 2.0, Synth::Foe(origin), pan, Bus::Ball);
+    tennis.opp_serve_timer = Some(Timer::from_seconds(OPP_SERVE_COUNTDOWN, TimerMode::Once));
 }
 
 /// Opponent's service game, part 2 — the serve flight.
@@ -291,10 +303,9 @@ pub(crate) struct GameWorld<'w, 's> {
     pub transforms: Query<'w, 's, &'static mut Transform>,
 }
 
-/// Drives the opponent's service game: auto-starts his position signal
-/// when a Ready point comes up on his serve, then fires the serve when
-/// the signal timer lapses. Runs before `drift_paddles`/`ball_flight`.
-#[allow(clippy::too_many_arguments)]
+/// Drives the opponent's service game: after a quiet pause for the score
+/// announcement, auto-starts his position signal, then fires the serve when
+/// the signal countdown lapses. Runs before `drift_paddles`/`ball_flight`.
 pub(crate) fn opponent_serve_tick(world: GameWorld) {
     let GameWorld {
         mut commands,
@@ -331,8 +342,23 @@ pub(crate) fn opponent_serve_tick(world: GameWorld) {
         }
         return;
     }
-    // No signal in progress: start one when his serve comes up.
+    // No signal in progress: wait one quiet beat, then start it when his
+    // serve comes up. The wait keeps the score announcement from being
+    // overwritten by the stance call in the same breath.
     if tennis.m.phase == Phase::Ready && !flight.active && !tennis.m.is_player_serve() {
+        match tennis.opp_serve_wait.as_mut() {
+            Some(timer) => {
+                timer.tick(time.delta());
+                if !timer.finished() {
+                    return;
+                }
+                tennis.opp_serve_wait = None;
+            }
+            None => {
+                tennis.opp_serve_wait = Some(Timer::from_seconds(OPP_SERVE_WAIT, TimerMode::Once));
+                return;
+            }
+        }
         if let Ok(ball) = balls.single() {
             start_opponent_serve_signal(
                 &mut commands,
