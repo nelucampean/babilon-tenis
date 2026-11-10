@@ -3,12 +3,12 @@ use babilon_core::{Difficulty, Phase, Shot, LANE_STEP, MAX_DIR};
 use bevy::prelude::*;
 
 use crate::announce::announce;
-use crate::audio::{AudioCtx, AudioMode, Bus, Pending, Sfx, Synth, VolGroup, Volumes};
+use crate::audio::{AudioCtx, AudioMode, Bus, Pending, Sfx, Synth, VolGroup};
 use crate::ball::Flight;
 
 use crate::gameplay::{do_hit, do_serve, GameWorld, Tennis};
 
-use crate::settings;
+use crate::settings::Settings;
 use crate::state::AppState;
 
 // ---- systems ---------------------------------------------------------------
@@ -57,8 +57,7 @@ pub(crate) fn keyboard(world: GameWorld, keys: Res<ButtonInput<KeyCode>>) {
         mut particles,
         pa,
         sfx,
-        vols,
-        mode,
+        settings,
         mut pending,
         balls,
         players,
@@ -66,7 +65,7 @@ pub(crate) fn keyboard(world: GameWorld, keys: Res<ButtonInput<KeyCode>>) {
         mut transforms,
         ..
     } = world;
-    let mut audio = AudioCtx::new(sfx.as_deref(), *vols, *mode, &mut pending);
+    let mut audio = AudioCtx::new(sfx.as_deref(), settings.vols, settings.mode, &mut pending);
     if keys.just_pressed(KeyCode::KeyR) {
         // history_ro already ends with the score line + serve prompt, so
         // repeating it verbatim avoids announcing the score twice.
@@ -166,35 +165,18 @@ pub(crate) fn keyboard(world: GameWorld, keys: Res<ButtonInput<KeyCode>>) {
 /// output device. Split out of `keyboard` — Bevy caps function systems at
 /// 16 parameters, and settings deserve their own system anyway.
 ///
-/// Every branch that mutates setup calls [`persist_settings`] so the next
-/// launch resumes where you left off.
-pub(crate) fn persist_settings(
-    tennis: &Tennis,
-    vols: &Volumes,
-    mode: &AudioMode,
-    sfx: Option<&Sfx>,
-) {
-    settings::save(
-        tennis.difficulty,
-        *mode,
-        vols,
-        sfx.map(|s| s.swapped()).unwrap_or(false),
-    );
-}
-
-#[allow(clippy::too_many_arguments)]
+/// Each branch only mutates [`Settings`]; `settings::autosave` persists it
+/// at the end of the frame, so there is no manual save call to forget.
 pub(crate) fn settings_keys(
     mut commands: Commands,
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
-    mut tennis: ResMut<Tennis>,
-    mut vols: ResMut<Volumes>,
-    mut mode: ResMut<AudioMode>,
+    mut settings: ResMut<Settings>,
     mut pending: ResMut<Pending>,
     sfx: Option<Res<Sfx>>,
 ) {
     let sfx = sfx.as_deref();
-    let mut audio = AudioCtx::new(sfx, *vols, *mode, &mut pending);
+    let mut audio = AudioCtx::new(sfx, settings.vols, settings.mode, &mut pending);
     if keys.just_pressed(KeyCode::KeyT) {
         // Stadium test + stereo channel check: hard-left blip now,
         // hard-right blip half a second later. If "stânga" comes out of
@@ -215,27 +197,28 @@ pub(crate) fn settings_keys(
         return;
     }
     if keys.just_pressed(KeyCode::KeyG) {
-        tennis.difficulty = match tennis.difficulty {
+        settings.difficulty = match settings.difficulty {
             Difficulty::Easy => Difficulty::Normal,
             Difficulty::Normal => Difficulty::Hard,
             Difficulty::Hard => Difficulty::Easy,
         };
-        let label = match tennis.difficulty {
+        let label = match settings.difficulty {
             Difficulty::Easy => "Ușor",
             Difficulty::Normal => "Normal",
             Difficulty::Hard => "Greu",
         };
         announce(&mut commands, format!("Dificultate: {label}."));
-        persist_settings(&tennis, &vols, &mode, sfx);
         return;
     }
     if keys.just_pressed(KeyCode::KeyM) {
-        *mode = match *mode {
+        settings.mode = match settings.mode {
             AudioMode::Access => AudioMode::Real,
             AudioMode::Real => AudioMode::Access,
         };
-        announce(&mut commands, format!("Mod audio {}.", mode.label_ro()));
-        persist_settings(&tennis, &vols, &mode, sfx);
+        announce(
+            &mut commands,
+            format!("Mod audio {}.", settings.mode.label_ro()),
+        );
         return;
     }
     if keys.just_pressed(KeyCode::KeyN) {
@@ -244,6 +227,7 @@ pub(crate) fn settings_keys(
         if let Some(s) = sfx {
             let swapped = !s.swapped();
             s.set_swapped(swapped);
+            settings.swap_stereo = swapped;
             announce(
                 &mut commands,
                 if swapped {
@@ -255,25 +239,23 @@ pub(crate) fn settings_keys(
         } else {
             announce(&mut commands, "Stereo normal (fără motor audio).");
         }
-        persist_settings(&tennis, &vols, &mode, sfx);
         return;
     }
     if keys.just_pressed(KeyCode::KeyC) {
-        vols.group = vols.group.next();
-        let v = match vols.group {
-            VolGroup::Ball => vols.ball,
-            VolGroup::Umpire => vols.umpire,
-            VolGroup::Crowd => vols.crowd,
+        settings.vols.group = settings.vols.group.next();
+        let v = match settings.vols.group {
+            VolGroup::Ball => settings.vols.ball,
+            VolGroup::Umpire => settings.vols.umpire,
+            VolGroup::Crowd => settings.vols.crowd,
         };
         announce(
             &mut commands,
             format!(
                 "Grup volum: {}. {}%. Z scade, X crește.",
-                vols.group.label_ro(),
+                settings.vols.group.label_ro(),
                 (v * 100.0) as u32
             ),
         );
-        persist_settings(&tennis, &vols, &mode, sfx);
         return;
     }
     if keys.just_pressed(KeyCode::KeyZ) || keys.just_pressed(KeyCode::KeyX) {
@@ -282,14 +264,13 @@ pub(crate) fn settings_keys(
         } else {
             0.1
         };
-        let (group, v) = vols.adjust(delta);
+        let (group, v) = settings.vols.adjust(delta);
         if let Some(s) = sfx {
-            s.refresh_ambient(vols.crowd);
+            s.refresh_ambient(settings.vols.crowd);
         }
         announce(
             &mut commands,
             format!("Volum {}: {}%.", group.label_ro(), (v * 100.0) as u32),
         );
-        persist_settings(&tennis, &vols, &mode, sfx);
     }
 }

@@ -41,6 +41,7 @@ mod smoke {
     use crate::input::*;
     use crate::particles::*;
     use crate::scoreboard::*;
+    use crate::settings::Settings;
     use crate::state::AppState;
     use crate::theme::*;
     use accesskit::Role;
@@ -75,7 +76,6 @@ mod smoke {
         app.init_state::<AppState>();
         app.insert_resource(Tennis {
             m: Match::new(),
-            difficulty: Difficulty::Normal,
             hit_window: None,
             opp_serve_timer: None,
             opp_serve_origin: 1,
@@ -88,8 +88,7 @@ mod smoke {
         });
         app.insert_resource(Poses::default());
         app.insert_resource(Particles::default());
-        app.insert_resource(Volumes::default());
-        app.insert_resource(AudioMode::Access);
+        app.insert_resource(Settings::default());
         app.insert_resource(Pending::default());
         app.init_resource::<Announcer>();
         app.add_event::<Announce>();
@@ -127,8 +126,10 @@ mod smoke {
                     hit_timeout,
                     animate_athletes,
                 )
+                    .chain()
                     .run_if(in_state(AppState::Playing)),
                 settings_keys,
+                crate::settings::autosave,
                 info_focus_keys,
                 a11y_focus_requests,
                 audio::play_pending,
@@ -326,17 +327,20 @@ mod smoke {
         let mut app = test_app();
         press(&mut app, KeyCode::KeyG);
         assert_eq!(
-            app.world().resource::<Tennis>().difficulty,
+            app.world().resource::<Settings>().difficulty,
             Difficulty::Hard
         );
         press(&mut app, KeyCode::KeyM);
-        assert_eq!(*app.world().resource::<AudioMode>(), AudioMode::Real);
+        assert_eq!(app.world().resource::<Settings>().mode, AudioMode::Real);
         press(&mut app, KeyCode::KeyC);
-        assert_eq!(app.world().resource::<Volumes>().group, VolGroup::Umpire);
+        assert_eq!(
+            app.world().resource::<Settings>().vols.group,
+            VolGroup::Umpire
+        );
         press(&mut app, KeyCode::KeyX);
-        assert!((app.world().resource::<Volumes>().umpire - 1.1).abs() < 1e-6);
+        assert!((app.world().resource::<Settings>().vols.umpire - 1.1).abs() < 1e-6);
         press(&mut app, KeyCode::KeyZ);
-        assert!((app.world().resource::<Volumes>().umpire - 1.0).abs() < 1e-6);
+        assert!((app.world().resource::<Settings>().vols.umpire - 1.0).abs() < 1e-6);
         // N with no audio engine: answers gracefully, nothing toggles nowhere.
         press(&mut app, KeyCode::KeyN);
         assert!(app

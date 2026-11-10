@@ -12,9 +12,10 @@ use bevy::prelude::*;
 
 use crate::a11y::{refresh_box, set_node_value};
 use crate::announce::Announcer;
-use crate::audio::{AudioMode, Sfx, Volumes};
+use crate::audio::Sfx;
 use crate::gameplay::Tennis;
 use crate::scoreboard::{scoreboard_texts, SbCell, SbCol, SbRoot};
+use crate::settings::Settings;
 use crate::state::AppState;
 use crate::theme::{SERVE_OFF, SERVE_ON};
 
@@ -72,8 +73,7 @@ pub(crate) struct HudWorld<'w, 's> {
     tennis: Res<'w, Tennis>,
     state: Res<'w, State<AppState>>,
     announcer: Res<'w, Announcer>,
-    vols: Res<'w, Volumes>,
-    mode: Res<'w, AudioMode>,
+    settings: Res<'w, Settings>,
     sfx: Option<Res<'w, Sfx>>,
     lines: Query<
         'w,
@@ -94,13 +94,12 @@ pub(crate) fn refresh_ui(mut hud: HudWorld) {
     if !hud.tennis.is_changed()
         && !hud.state.is_changed()
         && !hud.announcer.is_changed()
-        && !hud.vols.is_changed()
-        && !hud.mode.is_changed()
+        && !hud.settings.is_changed()
     {
         return;
     }
 
-    let diff_label = match hud.tennis.difficulty {
+    let diff_label = match hud.settings.difficulty {
         Difficulty::Easy => "Ușor",
         Difficulty::Normal => "Normal",
         Difficulty::Hard => "Greu",
@@ -128,11 +127,11 @@ pub(crate) fn refresh_ui(mut hud: HudWorld) {
         },
         mode: format!(
             "{} • {} • Volum {}/{}/{} • Stereo {}",
-            hud.mode.label_ro(),
+            hud.settings.mode.label_ro(),
             diff_label,
-            (hud.vols.ball * 100.0) as u32,
-            (hud.vols.umpire * 100.0) as u32,
-            (hud.vols.crowd * 100.0) as u32,
+            (hud.settings.vols.ball * 100.0) as u32,
+            (hud.settings.vols.umpire * 100.0) as u32,
+            (hud.settings.vols.crowd * 100.0) as u32,
             if swapped { "invers" } else { "normal" }
         ),
     };

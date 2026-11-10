@@ -27,8 +27,7 @@ use babilon_core::Match;
 
 pub(crate) fn run() {
     // Last session's setup (difficulty, audio mode, volumes, stereo swap).
-    let saved = settings::load();
-    let vols = saved.vols;
+    let settings = settings::Settings::load();
     let mut app = App::new();
     // Quiet the MP3 demuxer chatter (unsupported GEOB id3 frames, VBR
     // duration estimates) — it prints one line pair per clip otherwise.
@@ -55,7 +54,6 @@ pub(crate) fn run() {
     .add_event::<Announce>()
     .insert_resource(Tennis {
         m: Match::new(),
-        difficulty: saved.difficulty,
         hit_window: None,
         opp_serve_timer: None,
         opp_serve_origin: 1,
@@ -68,8 +66,7 @@ pub(crate) fn run() {
     })
     .insert_resource(Poses::default())
     .insert_resource(Particles::default())
-    .insert_resource(vols)
-    .insert_resource(saved.mode)
+    .insert_resource(settings)
     .insert_resource(Pending::default())
     // Input focus tracking: required for ANY AccessKit tree updates
     // (bevy_winit skips them entirely without `InputFocus`), and lets
@@ -91,8 +88,10 @@ pub(crate) fn run() {
                 hit_timeout,
                 animate_athletes,
             )
+                .chain()
                 .run_if(in_state(AppState::Playing)),
             settings_keys,
+            settings::autosave,
             info_focus_keys,
             a11y_focus_requests,
             audio::play_pending,
@@ -103,8 +102,8 @@ pub(crate) fn run() {
     );
     // Stadium sound on its own thread (silent without an audio device).
     // Systems take `Option<Res<Sfx>>`; headless tests simply omit it.
-    let sfx = Sfx::start(vols.crowd);
-    sfx.set_swapped(saved.swap_stereo);
+    let sfx = Sfx::start(settings.vols.crowd);
+    sfx.set_swapped(settings.swap_stereo);
     app.insert_resource(sfx);
     eprintln!("[APP] starting Bevy loop");
     app.run();

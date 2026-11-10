@@ -84,15 +84,14 @@ pub(crate) fn ball_flight(world: GameWorld) {
         mut particles,
         pa,
         sfx,
-        vols,
-        mode,
+        settings,
         mut pending,
         balls,
         shadows,
         mut transforms,
         ..
     } = world;
-    let mut audio = AudioCtx::new(sfx.as_deref(), *vols, *mode, &mut pending);
+    let mut audio = AudioCtx::new(sfx.as_deref(), settings.vols, settings.mode, &mut pending);
 
     let ball = balls.single().ok();
     let shadow = shadows.single().ok();
@@ -151,6 +150,7 @@ pub(crate) fn ball_flight(world: GameWorld) {
                     &mut transforms,
                     &pa,
                     &mut particles,
+                    settings.difficulty,
                 ),
                 FlightAfter::IncomingLanded => land_incoming(&mut commands, &audio, &mut tennis),
                 FlightAfter::OpponentServeLanded => land_opponent_serve(
@@ -163,6 +163,7 @@ pub(crate) fn ball_flight(world: GameWorld) {
                     &mut transforms,
                     &pa,
                     &mut particles,
+                    settings.difficulty,
                 ),
                 FlightAfter::ReturnLanded => {
                     land_return(
@@ -177,6 +178,7 @@ pub(crate) fn ball_flight(world: GameWorld) {
                         &mut transforms,
                         &pa,
                         &mut particles,
+                        settings.difficulty,
                     );
                 }
                 FlightAfter::OutLanded => {

@@ -7,17 +7,21 @@
 
 use crate::audio::{AudioMode, Volumes};
 use babilon_core::Difficulty;
+use bevy::prelude::*;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct Persisted {
-    pub difficulty: Difficulty,
-    pub mode: AudioMode,
-    pub vols: Volumes,
-    pub swap_stereo: bool,
+/// Every user preference in one place: difficulty, audio mode, the three
+/// volume groups, and the stereo-swap flag. Mutate this resource and let
+/// [`autosave`] write it to disk; no system persists fields by hand.
+#[derive(Resource, Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Settings {
+    pub(crate) difficulty: Difficulty,
+    pub(crate) mode: AudioMode,
+    pub(crate) vols: Volumes,
+    pub(crate) swap_stereo: bool,
 }
 
-impl Default for Persisted {
+impl Default for Settings {
     fn default() -> Self {
         Self {
             difficulty: Difficulty::Normal,
@@ -28,17 +32,32 @@ impl Default for Persisted {
     }
 }
 
+impl Settings {
+    /// Load last session's preferences, or defaults if the file is missing.
+    pub(crate) fn load() -> Self {
+        load_from(&settings_path())
+    }
+
+    /// Best-effort save to the platform config path.
+    pub(crate) fn save(&self) {
+        save_to(&settings_path(), self);
+    }
+}
+
+/// Persist once per frame in which [`Settings`] actually changed.
+pub(crate) fn autosave(settings: Res<Settings>) {
+    if settings.is_changed() && !settings.is_added() {
+        settings.save();
+    }
+}
+
 fn settings_path() -> PathBuf {
     directories::ProjectDirs::from("", "Babilon", "BabilonTennis")
         .map(|p| p.config_dir().join("settings.toml"))
         .unwrap_or_else(|| PathBuf::from("babilon-settings.toml"))
 }
 
-pub fn load() -> Persisted {
-    load_from(&settings_path())
-}
-
-fn load_from(path: &std::path::Path) -> Persisted {
+fn load_from(path: &std::path::Path) -> Settings {
     match std::fs::read_to_string(path) {
         Ok(text) => match toml::from_str(&text) {
             Ok(s) => s,
@@ -47,27 +66,14 @@ fn load_from(path: &std::path::Path) -> Persisted {
                     "[SETUP] ignoring corrupt settings file {}: {e}",
                     path.display()
                 );
-                Persisted::default()
+                Settings::default()
             }
         },
-        Err(_) => Persisted::default(),
+        Err(_) => Settings::default(),
     }
 }
 
-/// Snapshot the live values to disk. Best-effort: logs and returns on error.
-pub fn save(difficulty: Difficulty, mode: AudioMode, vols: &Volumes, swap_stereo: bool) {
-    save_to(
-        &settings_path(),
-        &Persisted {
-            difficulty,
-            mode,
-            vols: *vols,
-            swap_stereo,
-        },
-    );
-}
-
-fn save_to(path: &std::path::Path, saved: &Persisted) {
+fn save_to(path: &std::path::Path, saved: &Settings) {
     let text = match toml::to_string_pretty(saved) {
         Ok(t) => t,
         Err(e) => {
@@ -95,8 +101,8 @@ mod tests {
         let path = dir.join("settings.toml");
         let _ = std::fs::remove_dir_all(&dir);
         // missing file -> defaults, no panic
-        assert_eq!(load_from(&path), Persisted::default());
-        let custom = Persisted {
+        assert_eq!(load_from(&path), Settings::default());
+        let custom = Settings {
             difficulty: Difficulty::Hard,
             mode: AudioMode::Real,
             vols: Volumes {
@@ -111,7 +117,7 @@ mod tests {
         assert_eq!(load_from(&path), custom);
         // corrupt file -> defaults, no panic
         std::fs::write(&path, "difficulty = [unclosed").unwrap();
-        assert_eq!(load_from(&path), Persisted::default());
+        assert_eq!(load_from(&path), Settings::default());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

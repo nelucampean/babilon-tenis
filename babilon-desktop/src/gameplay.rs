@@ -7,17 +7,17 @@ use rand::Rng;
 
 use crate::announce::announce;
 use crate::athlete::{OpponentPaddle, PlayerPaddle, Poses};
-use crate::audio::{AudioCtx, AudioMode, Bus, Pending, Sfx, Synth, Volumes};
+use crate::audio::{AudioCtx, Bus, Pending, Sfx, Synth};
 use crate::ball::{Ball, BallShadow, Flight, FlightAfter};
 use crate::layout::NET_Y;
 use crate::particles::{spawn_sparks, ParticleAssets, Particles};
+use crate::settings::Settings;
 
 // ---- resources -------------------------------------------------------------
 
 #[derive(Resource)]
 pub(crate) struct Tennis {
     pub(crate) m: Match,
-    pub(crate) difficulty: Difficulty,
     pub(crate) hit_window: Option<Timer>,
     /// Countdown between the opponent's position signal and his serve
     /// flight. `None` outside opponent service games.
@@ -113,6 +113,7 @@ pub(crate) fn do_incoming(
     flight: &mut Flight,
     ball: Entity,
     transforms: &mut Query<&mut Transform>,
+    difficulty: Difficulty,
 ) {
     use babilon_core::dir_label_ro;
     if tennis.m.phase == Phase::Finished {
@@ -125,7 +126,7 @@ pub(crate) fn do_incoming(
         // difficulties, wrong-foots you toward the far corner. Easy hits
         // anywhere — it doesn't scout you at all.
         let player_lane = (targets.player_x / LANE_STEP).round() as i8;
-        Match::pick_incoming_side(tennis.difficulty, player_lane, rng.gen())
+        Match::pick_incoming_side(difficulty, player_lane, rng.gen())
     };
     tennis.m.incoming_side = side;
     // Chase the ball like the web's opponent.target (near the landing
@@ -189,12 +190,12 @@ pub(crate) fn start_opponent_serve_signal(
     now: f32,
     ball: Entity,
     transforms: &mut Query<&mut Transform>,
+    difficulty: Difficulty,
 ) {
     use babilon_core::dir_label_ro;
     let origin = tennis.m.serve_origin_lane();
     let player_lane = (targets.player_x / LANE_STEP).round() as i8;
-    let target =
-        Match::pick_incoming_side(tennis.difficulty, player_lane, rand::thread_rng().gen());
+    let target = Match::pick_incoming_side(difficulty, player_lane, rand::thread_rng().gen());
     tennis.m.incoming_side = target;
     tennis.opp_serve_origin = origin;
     tennis.opp_serve_target = target;
@@ -282,8 +283,7 @@ pub(crate) struct GameWorld<'w, 's> {
     pub particles: ResMut<'w, Particles>,
     pub pa: Res<'w, ParticleAssets>,
     pub sfx: Option<Res<'w, Sfx>>,
-    pub vols: Res<'w, Volumes>,
-    pub mode: Res<'w, AudioMode>,
+    pub settings: Res<'w, Settings>,
     pub pending: ResMut<'w, Pending>,
     pub balls: Query<'w, 's, Entity, With<Ball>>,
     pub players: Query<'w, 's, Entity, With<PlayerPaddle>>,
@@ -305,14 +305,13 @@ pub(crate) fn opponent_serve_tick(world: GameWorld) {
         mut poses,
         mut flight,
         sfx,
-        vols,
-        mode,
+        settings,
         mut pending,
         balls,
         mut transforms,
         ..
     } = world;
-    let mut audio = AudioCtx::new(sfx.as_deref(), *vols, *mode, &mut pending);
+    let mut audio = AudioCtx::new(sfx.as_deref(), settings.vols, settings.mode, &mut pending);
     if tennis.m.phase == Phase::Finished {
         return;
     }
@@ -349,6 +348,7 @@ pub(crate) fn opponent_serve_tick(world: GameWorld) {
                 time.elapsed_secs(),
                 ball,
                 &mut transforms,
+                settings.difficulty,
             );
         }
     }
@@ -367,8 +367,9 @@ pub(crate) fn land_opponent_serve(
     transforms: &mut Query<&mut Transform>,
     pa: &ParticleAssets,
     particles: &mut Particles,
+    difficulty: Difficulty,
 ) {
-    if Match::opponent_serve_is_ace(tennis.difficulty, rand::thread_rng().gen()) {
+    if Match::opponent_serve_is_ace(difficulty, rand::thread_rng().gen()) {
         let r = tennis
             .m
             .score_point(1, "As! Serviciul adversarului te-a prins");
@@ -400,10 +401,11 @@ pub(crate) fn land_serve(
     transforms: &mut Query<&mut Transform>,
     pa: &ParticleAssets,
     particles: &mut Particles,
+    difficulty: Difficulty,
 ) {
     let mut rng = rand::thread_rng();
     let roll: f32 = rng.gen();
-    if Match::serve_is_ace(tennis.difficulty, roll) {
+    if Match::serve_is_ace(difficulty, roll) {
         let r = tennis.m.score_point(0, "As!");
         let msg = r.message_ro.clone();
         announce(&mut *commands, msg);
@@ -416,7 +418,7 @@ pub(crate) fn land_serve(
         reset_ball_to_server(transforms, ball, targets, server);
     } else {
         do_incoming(
-            commands, audio, tennis, targets, poses, now, flight, ball, transforms,
+            commands, audio, tennis, targets, poses, now, flight, ball, transforms, difficulty,
         );
     }
 }
@@ -446,12 +448,13 @@ pub(crate) fn land_return(
     transforms: &mut Query<&mut Transform>,
     pa: &ParticleAssets,
     particles: &mut Particles,
+    difficulty: Difficulty,
 ) {
     let mut rng = rand::thread_rng();
     // Resolve with the contact snapshot (aim/shot/quality at hit time) —
     // never with the live keys, which the player may have moved since.
     let outcome = RallyOutcome::resolve(
-        tennis.difficulty,
+        difficulty,
         flight.hit_dir,
         tennis.m.incoming_side,
         flight.hit_shot,
@@ -513,7 +516,7 @@ pub(crate) fn land_return(
             }
         }
         None => do_incoming(
-            commands, audio, tennis, targets, poses, now, flight, ball, transforms,
+            commands, audio, tennis, targets, poses, now, flight, ball, transforms, difficulty,
         ),
     }
 }
@@ -651,14 +654,13 @@ pub(crate) fn hit_timeout(world: GameWorld) {
         mut tennis,
         targets,
         sfx,
-        vols,
-        mode,
+        settings,
         mut pending,
         balls,
         mut transforms,
         ..
     } = world;
-    let audio = AudioCtx::new(sfx.as_deref(), *vols, *mode, &mut pending);
+    let audio = AudioCtx::new(sfx.as_deref(), settings.vols, settings.mode, &mut pending);
     let expired = match &mut tennis.hit_window {
         Some(timer) => {
             timer.tick(time.delta());
