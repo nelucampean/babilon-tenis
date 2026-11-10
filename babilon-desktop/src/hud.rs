@@ -1,7 +1,13 @@
-//! Accessible side panel: the HUD text components and their refresh.
+//! Accessible side panel: one data-driven text line per row.
+//!
+//! Every panel row is an [`InfoLine`] tag plus a `Text` (and usually an
+//! `AccessibilityNode`). [`refresh_ui`] builds all five strings once and
+//! walks them in a single query, so adding or reordering a row no longer
+//! means another marker component and another mutually-exclusive query.
 use accesskit::Role;
 use babilon_core::Difficulty;
 use bevy::a11y::AccessibilityNode;
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
 use crate::a11y::{refresh_box, set_node_value};
@@ -11,152 +17,137 @@ use crate::gameplay::Tennis;
 use crate::scoreboard::{scoreboard_texts, SbCell, SbCol, SbRoot};
 use crate::state::AppState;
 
-// ---- entities --------------------------------------------------------------
+/// Which side-panel row a text node renders.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InfoLine {
+    Score,
+    Status,
+    Shot,
+    Phase,
+    Mode,
+}
 
-#[derive(Component)]
-pub(crate) struct ScoreText;
-#[derive(Component)]
-pub(crate) struct StatusText;
-#[derive(Component)]
-pub(crate) struct ShotText;
-#[derive(Component)]
-pub(crate) struct PhaseText;
-#[derive(Component)]
-pub(crate) struct ModeText;
+impl InfoLine {
+    /// AccessKit label for this row (stable, not the dynamic value).
+    fn label(self) -> &'static str {
+        match self {
+            Self::Score => "Scor",
+            Self::Status => "Anunțuri",
+            Self::Shot => "Direcție și lovitură",
+            Self::Phase => "Fază joc",
+            Self::Mode => "Mod audio și volum",
+        }
+    }
 
-pub(crate) fn refresh_ui(
-    tennis: Res<Tennis>,
-    state: Res<State<AppState>>,
-    announcer: Res<Announcer>,
-    vols: Res<Volumes>,
-    mode: Res<AudioMode>,
-    sfx: Option<Res<Sfx>>,
-    mut score_q: Query<(&mut Text, Option<&mut AccessibilityNode>), With<ScoreText>>,
-    mut status_q: Query<
-        (&mut Text, Option<&mut AccessibilityNode>),
-        (With<StatusText>, Without<ScoreText>),
-    >,
-    mut shot_q: Query<
-        (&mut Text, Option<&mut AccessibilityNode>),
-        (With<ShotText>, Without<ScoreText>, Without<StatusText>),
-    >,
-    mut phase_q: Query<
-        (&mut Text, Option<&mut AccessibilityNode>),
+    /// Only the status row is a live region (announcements speak by
+    /// themselves); score/shot/phase/mode are quiet and purely browsable.
+    fn live(self) -> bool {
+        self == Self::Status
+    }
+
+    fn text(self, lines: &Lines) -> &str {
+        match self {
+            Self::Score => &lines.score,
+            Self::Status => &lines.status,
+            Self::Shot => &lines.shot,
+            Self::Phase => &lines.phase,
+            Self::Mode => &lines.mode,
+        }
+    }
+}
+
+/// All side-panel strings for one frame.
+struct Lines {
+    score: String,
+    status: String,
+    shot: String,
+    phase: String,
+    mode: String,
+}
+
+/// Everything `refresh_ui` reads or writes, in one argument.
+#[derive(SystemParam)]
+pub(crate) struct HudWorld<'w, 's> {
+    tennis: Res<'w, Tennis>,
+    state: Res<'w, State<AppState>>,
+    announcer: Res<'w, Announcer>,
+    vols: Res<'w, Volumes>,
+    mode: Res<'w, AudioMode>,
+    sfx: Option<Res<'w, Sfx>>,
+    lines: Query<
+        'w,
+        's,
         (
-            With<PhaseText>,
-            Without<ScoreText>,
-            Without<StatusText>,
-            Without<ShotText>,
+            &'static InfoLine,
+            &'static mut Text,
+            Option<&'static mut AccessibilityNode>,
         ),
+        Without<SbCell>,
     >,
-    mut mode_q: Query<
-        (&mut Text, Option<&mut AccessibilityNode>),
-        (
-            With<ModeText>,
-            Without<ScoreText>,
-            Without<StatusText>,
-            Without<ShotText>,
-            Without<PhaseText>,
-        ),
-    >,
-    mut sb_text_q: Query<
-        (&mut Text, &SbCell),
-        (
-            Without<ScoreText>,
-            Without<StatusText>,
-            Without<ShotText>,
-            Without<PhaseText>,
-            Without<ModeText>,
-        ),
-    >,
-    mut sb_dot_q: Query<(&mut BackgroundColor, &SbCell)>,
-    mut sb_root_q: Query<
-        &mut AccessibilityNode,
-        (
-            With<SbRoot>,
-            Without<ScoreText>,
-            Without<StatusText>,
-            Without<ShotText>,
-            Without<PhaseText>,
-            Without<ModeText>,
-        ),
-    >,
-) {
-    if !tennis.is_changed()
-        && !state.is_changed()
-        && !announcer.is_changed()
-        && !vols.is_changed()
-        && !mode.is_changed()
+    sb_text_q: Query<'w, 's, (&'static mut Text, &'static SbCell), Without<InfoLine>>,
+    sb_dot_q: Query<'w, 's, (&'static mut BackgroundColor, &'static SbCell)>,
+    sb_root_q: Query<'w, 's, &'static mut AccessibilityNode, (With<SbRoot>, Without<InfoLine>)>,
+}
+
+pub(crate) fn refresh_ui(mut hud: HudWorld) {
+    if !hud.tennis.is_changed()
+        && !hud.state.is_changed()
+        && !hud.announcer.is_changed()
+        && !hud.vols.is_changed()
+        && !hud.mode.is_changed()
     {
         return;
     }
-    let score_line = format!(
-        "Seturi {} – {}\nGame-uri {} – {}\n{}",
-        tennis.m.sets[0],
-        tennis.m.sets[1],
-        tennis.m.games[0],
-        tennis.m.games[1],
-        tennis.m.score_text_ro()
-    );
-    for (mut t, a11y) in &mut score_q {
-        **t = score_line.clone();
-        if let Some(mut node) = a11y {
-            refresh_box(&mut node, "Scor", &score_line, false);
-        }
-    }
-    for (mut t, a11y) in &mut status_q {
-        **t = announcer.status_ro.clone();
-        if let Some(mut node) = a11y {
-            refresh_box(&mut node, "Anunțuri", &announcer.status_ro, true);
-        }
-    }
-    let shot_line = format!(
-        "Direcție: {} • Lovitură: {}",
-        babilon_core::dir_label_ro(tennis.m.dir),
-        tennis.m.shot.label_ro()
-    );
-    for (mut t, a11y) in &mut shot_q {
-        **t = shot_line.clone();
-        if let Some(mut node) = a11y {
-            refresh_box(&mut node, "Direcție și lovitură", &shot_line, false);
-        }
-    }
-    let phase_line = if *state.get() == AppState::Paused {
-        "PAUZĂ".to_string()
-    } else {
-        tennis.m.phase.visual_label_ro().to_string()
-    };
-    for (mut t, a11y) in &mut phase_q {
-        **t = phase_line.clone();
-        if let Some(mut node) = a11y {
-            refresh_box(&mut node, "Fază joc", &phase_line, false);
-        }
-    }
-    let diff_label = match tennis.difficulty {
+
+    let diff_label = match hud.tennis.difficulty {
         Difficulty::Easy => "Ușor",
         Difficulty::Normal => "Normal",
         Difficulty::Hard => "Greu",
     };
-    let swapped = sfx.as_deref().map(|s| s.swapped()).unwrap_or(false);
-    let mode_line = format!(
-        "{} • {} • Volum {}/{}/{} • Stereo {}",
-        mode.label_ro(),
-        diff_label,
-        (vols.ball * 100.0) as u32,
-        (vols.umpire * 100.0) as u32,
-        (vols.crowd * 100.0) as u32,
-        if swapped { "invers" } else { "normal" }
-    );
-    for (mut t, a11y) in &mut mode_q {
-        **t = mode_line.clone();
+    let swapped = hud.sfx.as_deref().map(|s| s.swapped()).unwrap_or(false);
+    let lines = Lines {
+        score: format!(
+            "Seturi {} – {}\nGame-uri {} – {}\n{}",
+            hud.tennis.m.sets[0],
+            hud.tennis.m.sets[1],
+            hud.tennis.m.games[0],
+            hud.tennis.m.games[1],
+            hud.tennis.m.score_text_ro()
+        ),
+        status: hud.announcer.status_ro.clone(),
+        shot: format!(
+            "Direcție: {} • Lovitură: {}",
+            babilon_core::dir_label_ro(hud.tennis.m.dir),
+            hud.tennis.m.shot.label_ro()
+        ),
+        phase: if *hud.state.get() == AppState::Paused {
+            "PAUZĂ".to_string()
+        } else {
+            hud.tennis.m.phase.visual_label_ro().to_string()
+        },
+        mode: format!(
+            "{} • {} • Volum {}/{}/{} • Stereo {}",
+            hud.mode.label_ro(),
+            diff_label,
+            (hud.vols.ball * 100.0) as u32,
+            (hud.vols.umpire * 100.0) as u32,
+            (hud.vols.crowd * 100.0) as u32,
+            if swapped { "invers" } else { "normal" }
+        ),
+    };
+
+    for (line, mut text, a11y) in &mut hud.lines {
+        let value = line.text(&lines);
+        **text = value.to_owned();
         if let Some(mut node) = a11y {
-            refresh_box(&mut node, "Mod audio și volum", &mode_line, false);
+            refresh_box(&mut node, line.label(), value, line.live());
         }
     }
+
     // TV scoreboard cells + screen-reader summary (same gate as the rest).
-    let sb = scoreboard_texts(&tennis.m);
-    for (mut t, cell) in &mut sb_text_q {
-        let v = match (cell.row, cell.col) {
+    let sb = scoreboard_texts(&hud.tennis.m);
+    for (mut text, cell) in &mut hud.sb_text_q {
+        let value = match (cell.row, cell.col) {
             (0, SbCol::Sets) => &sb.sets[0],
             (1, SbCol::Sets) => &sb.sets[1],
             (0, SbCol::Games) => &sb.games[0],
@@ -165,9 +156,9 @@ pub(crate) fn refresh_ui(
             (1, SbCol::Points) => &sb.points[1],
             _ => continue,
         };
-        **t = v.clone();
+        **text = value.clone();
     }
-    for (mut bg, cell) in &mut sb_dot_q {
+    for (mut bg, cell) in &mut hud.sb_dot_q {
         if cell.col != SbCol::Serve {
             continue;
         }
@@ -178,7 +169,7 @@ pub(crate) fn refresh_ui(
             Color::srgba(0.45, 0.55, 0.60, 0.45)
         });
     }
-    for mut node in &mut sb_root_q {
+    for mut node in &mut hud.sb_root_q {
         // Label role, no Focus action: browsable like the panel Region's
         // block, but never a tab stop — the right panel owns the focus order.
         node.set_role(Role::Label);

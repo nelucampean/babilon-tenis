@@ -400,7 +400,7 @@ pub(crate) fn setup(
                 );
                 order.push(
                     p.spawn((
-                        ScoreText,
+                        InfoLine::Score,
                         Text::new(score_txt),
                         TextFont {
                             font: bold.clone(),
@@ -414,7 +414,7 @@ pub(crate) fn setup(
                 );
                 info_status = p
                     .spawn((
-                        StatusText,
+                        InfoLine::Status,
                         Text::new(status_txt),
                         TextFont {
                             font: reg.clone(),
@@ -428,7 +428,7 @@ pub(crate) fn setup(
                 order.push(info_status);
                 order.push(
                     p.spawn((
-                        ShotText,
+                        InfoLine::Shot,
                         Text::new(shot_txt),
                         TextFont {
                             font: reg.clone(),
@@ -442,7 +442,7 @@ pub(crate) fn setup(
                 );
                 order.push(
                     p.spawn((
-                        PhaseText,
+                        InfoLine::Phase,
                         Text::new(phase_txt),
                         TextFont {
                             font: bold.clone(),
@@ -456,7 +456,7 @@ pub(crate) fn setup(
                 );
                 order.push(
                     p.spawn((
-                        ModeText,
+                        InfoLine::Mode,
                         Text::new(mode_txt),
                         TextFont {
                             font: reg.clone(),

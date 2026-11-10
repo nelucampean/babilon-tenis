@@ -102,11 +102,11 @@ mod smoke {
         app.add_event::<A11yActionRequest>();
         let status_e = app
             .world_mut()
-            .spawn((StatusText, live_box("Anunțuri", "test")))
+            .spawn((InfoLine::Status, live_box("Anunțuri", "test")))
             .id();
         let score_e = app
             .world_mut()
-            .spawn((ScoreText, readonly_box("Scor", "test")))
+            .spawn((InfoLine::Score, readonly_box("Scor", "test")))
             .id();
         app.insert_resource(InfoPanel {
             status: status_e,
