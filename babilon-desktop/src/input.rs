@@ -4,12 +4,47 @@ use bevy::prelude::*;
 
 use crate::announce::announce;
 use crate::audio::{AudioCtx, AudioMode, Bus, Pending, Sfx, Synth, VolGroup, Volumes};
+use crate::ball::Flight;
 
 use crate::gameplay::{do_hit, do_serve, GameWorld, Tennis};
 
 use crate::settings;
+use crate::state::AppState;
 
 // ---- systems ---------------------------------------------------------------
+
+/// Pause/resume. Runs in both states so P works while frozen; gameplay
+/// itself only runs in [`AppState::Playing`] (see `app.rs`).
+pub(crate) fn pause_key(
+    mut commands: Commands,
+    keys: Res<ButtonInput<KeyCode>>,
+    state: Res<State<AppState>>,
+    mut next: ResMut<NextState<AppState>>,
+    mut tennis: ResMut<Tennis>,
+    mut flight: ResMut<Flight>,
+) {
+    if !keys.just_pressed(KeyCode::KeyP) || tennis.m.phase == Phase::Finished {
+        return;
+    }
+    match state.get() {
+        AppState::Playing => {
+            next.set(AppState::Paused);
+            flight.active = false;
+            tennis.hit_window = None;
+            tennis.opp_serve_timer = None;
+            announce(&mut commands, "Pauză. Apasă P pentru reluare.");
+        }
+        AppState::Paused => {
+            next.set(AppState::Playing);
+            tennis.m.phase = Phase::Ready;
+            if tennis.m.is_player_serve() {
+                announce(&mut commands, "Meci reluat. Apasă S pentru serviciu.");
+            } else {
+                announce(&mut commands, "Meci reluat. Adversarul servește.");
+            }
+        }
+    }
+}
 
 pub(crate) fn keyboard(world: GameWorld, keys: Res<ButtonInput<KeyCode>>) {
     let GameWorld {
@@ -54,29 +89,6 @@ pub(crate) fn keyboard(world: GameWorld, keys: Res<ButtonInput<KeyCode>>) {
             &mut commands,
             format!("Adversar: {}.", babilon_core::dir_label_ro(lane)),
         );
-        return;
-    }
-    if keys.just_pressed(KeyCode::KeyP) {
-        if tennis.m.phase == Phase::Finished {
-            return;
-        }
-        tennis.paused = !tennis.paused;
-        flight.active = false;
-        if tennis.paused {
-            tennis.hit_window = None;
-            tennis.opp_serve_timer = None;
-            announce(&mut commands, "Pauză. Apasă P pentru reluare.");
-        } else {
-            tennis.m.phase = Phase::Ready;
-            if tennis.m.is_player_serve() {
-                announce(&mut commands, "Meci reluat. Apasă S pentru serviciu.");
-            } else {
-                announce(&mut commands, "Meci reluat. Adversarul servește.");
-            }
-        }
-        return;
-    }
-    if tennis.paused {
         return;
     }
     if keys.just_pressed(KeyCode::ArrowLeft) {

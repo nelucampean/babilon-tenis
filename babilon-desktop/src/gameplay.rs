@@ -17,7 +17,6 @@ use crate::particles::{spawn_sparks, ParticleAssets, Particles};
 pub(crate) struct Tennis {
     pub(crate) m: Match,
     pub(crate) difficulty: Difficulty,
-    pub(crate) paused: bool,
     pub(crate) hit_window: Option<Timer>,
     /// Countdown between the opponent's position signal and his serve
     /// flight. `None` outside opponent service games.
@@ -68,9 +67,6 @@ pub(crate) fn do_serve(
     ball: Entity,
     transforms: &mut Query<&mut Transform>,
 ) {
-    if tennis.paused {
-        return;
-    }
     if tennis.m.phase == Phase::Finished {
         announce(
             commands,
@@ -118,7 +114,7 @@ pub(crate) fn do_incoming(
     transforms: &mut Query<&mut Transform>,
 ) {
     use babilon_core::dir_label_ro;
-    if tennis.paused || tennis.m.phase == Phase::Finished {
+    if tennis.m.phase == Phase::Finished {
         return;
     }
     tennis.m.phase = Phase::Incoming;
@@ -316,7 +312,7 @@ pub(crate) fn opponent_serve_tick(world: GameWorld) {
         ..
     } = world;
     let mut audio = AudioCtx::new(sfx.as_deref(), *vols, *mode, &mut pending);
-    if tennis.paused || tennis.m.phase == Phase::Finished {
+    if tennis.m.phase == Phase::Finished {
         return;
     }
     if let Some(timer) = tennis.opp_serve_timer.as_mut() {
@@ -535,9 +531,6 @@ pub(crate) fn do_hit(
     pa: &ParticleAssets,
     particles: &mut Particles,
 ) {
-    if tennis.paused {
-        return;
-    }
     // Whiff check first: swinging at air is not a hit, no matter when.
     // dx is measured against the ball's live position — positioning is
     // the skill, not mashing Space.
@@ -665,9 +658,6 @@ pub(crate) fn hit_timeout(world: GameWorld) {
         ..
     } = world;
     let audio = AudioCtx::new(sfx.as_deref(), *vols, *mode, &mut pending);
-    if tennis.paused {
-        return;
-    }
     let expired = match &mut tennis.hit_window {
         Some(timer) => {
             timer.tick(time.delta());

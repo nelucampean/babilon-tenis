@@ -190,9 +190,6 @@ pub(crate) fn drift_paddles(world: GameWorld) {
         mut transforms,
         ..
     } = world;
-    if tennis.paused {
-        return;
-    }
     // Frame-rate independent approach (same feel at 30 or 144 fps).
     let dt = time.delta_secs().max(0.0);
     let player_k = 1.0 - (-dt * 7.0).exp();

@@ -18,6 +18,7 @@ use crate::input::*;
 use crate::particles::*;
 use crate::scoreboard::*;
 use crate::settings;
+use crate::state::AppState;
 use crate::theme::*;
 use babilon_core::Match;
 
@@ -48,12 +49,12 @@ pub(crate) fn run() {
                 ..default()
             }),
     )
+    .init_state::<AppState>()
     .init_resource::<Announcer>()
     .add_event::<Announce>()
     .insert_resource(Tennis {
         m: Match::new(),
         difficulty: saved.difficulty,
-        paused: false,
         hit_window: None,
         opp_serve_timer: None,
         opp_serve_origin: 1,
@@ -79,19 +80,23 @@ pub(crate) fn run() {
     .add_systems(
         Update,
         (
-            keyboard,
+            pause_key,
+            (
+                keyboard,
+                opponent_serve_tick,
+                drift_paddles,
+                ball_flight,
+                particle_fx,
+                hit_timeout,
+                animate_athletes,
+            )
+                .run_if(in_state(AppState::Playing)),
             settings_keys,
             info_focus_keys,
             a11y_focus_requests,
-            opponent_serve_tick,
-            drift_paddles,
-            ball_flight,
-            particle_fx,
-            hit_timeout,
             audio::play_pending,
             announce::announce_sink,
             refresh_ui,
-            animate_athletes,
         )
             .chain(),
     );

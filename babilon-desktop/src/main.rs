@@ -17,6 +17,7 @@ mod input;
 mod particles;
 mod scoreboard;
 mod settings;
+mod state;
 mod theme;
 
 fn main() {
@@ -39,6 +40,7 @@ mod smoke {
     use crate::input::*;
     use crate::particles::*;
     use crate::scoreboard::*;
+    use crate::state::AppState;
     use accesskit::Role;
     use babilon_core::*;
     use bevy::a11y::{AccessibilityNode, ActionRequest as A11yActionRequest};
@@ -67,10 +69,11 @@ mod smoke {
         // No audio device headless: no `Sfx` resource, so every `Sfx::*`
         // call takes the `None` path (systems use `Option<Res<Sfx>>`).
         app.add_plugins((MinimalPlugins, InputPlugin));
+        app.add_plugins(bevy::state::app::StatesPlugin);
+        app.init_state::<AppState>();
         app.insert_resource(Tennis {
             m: Match::new(),
             difficulty: Difficulty::Normal,
-            paused: false,
             hit_window: None,
             opp_serve_timer: None,
             opp_serve_origin: 1,
@@ -112,19 +115,23 @@ mod smoke {
         app.add_systems(
             Update,
             (
-                keyboard,
+                pause_key,
+                (
+                    keyboard,
+                    opponent_serve_tick,
+                    drift_paddles,
+                    ball_flight,
+                    particle_fx,
+                    hit_timeout,
+                    animate_athletes,
+                )
+                    .run_if(in_state(AppState::Playing)),
                 settings_keys,
                 info_focus_keys,
                 a11y_focus_requests,
-                opponent_serve_tick,
-                drift_paddles,
-                ball_flight,
-                particle_fx,
-                hit_timeout,
                 audio::play_pending,
                 announce_sink,
                 refresh_ui,
-                animate_athletes,
             )
                 .chain(),
         );
@@ -157,6 +164,7 @@ mod smoke {
 
     #[test]
     fn systems_boot_without_query_conflict() {
+        bevy::ecs::system::assert_is_system(pause_key);
         bevy::ecs::system::assert_is_system(keyboard);
         bevy::ecs::system::assert_is_system(settings_keys);
         bevy::ecs::system::assert_is_system(info_focus_keys);
@@ -172,6 +180,32 @@ mod smoke {
         let mut app = test_app();
         app.update();
         app.update();
+    }
+
+    #[test]
+    fn pause_freezes_court_and_p_resumes() {
+        let mut app = test_app();
+        press(&mut app, KeyCode::KeyP);
+        app.world_mut().run_schedule(StateTransition);
+        assert_eq!(
+            *app.world().resource::<State<AppState>>().get(),
+            AppState::Paused
+        );
+        let frozen = app.world().resource::<Targets>().player_x;
+        press(&mut app, KeyCode::ArrowLeft);
+        assert_eq!(app.world().resource::<Targets>().player_x, frozen);
+
+        press(&mut app, KeyCode::KeyP);
+        app.world_mut().run_schedule(StateTransition);
+        assert_eq!(
+            *app.world().resource::<State<AppState>>().get(),
+            AppState::Playing
+        );
+        press(&mut app, KeyCode::ArrowLeft);
+        assert_eq!(
+            app.world().resource::<Targets>().player_x,
+            frozen - LANE_STEP
+        );
     }
 
     #[test]

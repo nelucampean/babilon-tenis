@@ -98,7 +98,7 @@ pub(crate) fn ball_flight(world: GameWorld) {
 
     let ball = balls.single().ok();
     let shadow = shadows.single().ok();
-    if !flight.active || tennis.paused {
+    if !flight.active {
         return;
     }
     flight.t += time.delta_secs();

@@ -9,6 +9,7 @@ use crate::announce::Announcer;
 use crate::audio::{AudioMode, Sfx, Volumes};
 use crate::gameplay::Tennis;
 use crate::scoreboard::{scoreboard_texts, SbCell, SbCol, SbRoot};
+use crate::state::AppState;
 
 // ---- entities --------------------------------------------------------------
 
@@ -25,6 +26,7 @@ pub(crate) struct ModeText;
 
 pub(crate) fn refresh_ui(
     tennis: Res<Tennis>,
+    state: Res<State<AppState>>,
     announcer: Res<Announcer>,
     vols: Res<Volumes>,
     mode: Res<AudioMode>,
@@ -80,7 +82,12 @@ pub(crate) fn refresh_ui(
         ),
     >,
 ) {
-    if !tennis.is_changed() && !announcer.is_changed() && !vols.is_changed() && !mode.is_changed() {
+    if !tennis.is_changed()
+        && !state.is_changed()
+        && !announcer.is_changed()
+        && !vols.is_changed()
+        && !mode.is_changed()
+    {
         return;
     }
     let score_line = format!(
@@ -114,7 +121,7 @@ pub(crate) fn refresh_ui(
             refresh_box(&mut node, "Direcție și lovitură", &shot_line, false);
         }
     }
-    let phase_line = if tennis.paused {
+    let phase_line = if *state.get() == AppState::Paused {
         "PAUZĂ".to_string()
     } else {
         tennis.m.phase.visual_label_ro().to_string()
