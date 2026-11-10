@@ -5,7 +5,7 @@ use bevy::ecs::hierarchy::ChildOf;
 use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::prelude::*;
 
-use crate::theme::UiFonts;
+use crate::theme::{UiFonts, GOLD};
 
 // ---- TV scoreboard (top-left broadcast bug) ---------------------------------
 
@@ -92,11 +92,7 @@ pub(crate) fn sb_row(
                     height: Val::Px(12.),
                     ..default()
                 },
-                BackgroundColor(if serving {
-                    Color::srgb(0.98, 0.79, 0.40)
-                } else {
-                    dim
-                }),
+                BackgroundColor(if serving { GOLD } else { dim }),
             ));
             r.spawn((
                 Node {

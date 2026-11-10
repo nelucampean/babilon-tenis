@@ -72,8 +72,6 @@ pub(crate) enum FlightAfter {
 
 /// Y of the net visual (see `setup`: net sprite at y=20). A return swing is
 /// only legal once the ball is past it, on your side.
-pub(crate) const NET_Y: f32 = 20.0;
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn ball_flight(world: GameWorld) {
     let GameWorld {

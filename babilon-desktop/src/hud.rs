@@ -16,6 +16,7 @@ use crate::audio::{AudioMode, Sfx, Volumes};
 use crate::gameplay::Tennis;
 use crate::scoreboard::{scoreboard_texts, SbCell, SbCol, SbRoot};
 use crate::state::AppState;
+use crate::theme::{SERVE_OFF, SERVE_ON};
 
 /// Which side-panel row a text node renders.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,11 +164,7 @@ pub(crate) fn refresh_ui(mut hud: HudWorld) {
             continue;
         }
         let serving = (cell.row == 0) == sb.serve_you;
-        *bg = BackgroundColor(if serving {
-            Color::srgb(0.98, 0.79, 0.40)
-        } else {
-            Color::srgba(0.45, 0.55, 0.60, 0.45)
-        });
+        *bg = BackgroundColor(if serving { SERVE_ON } else { SERVE_OFF });
     }
     for mut node in &mut hud.sb_root_q {
         // Label role, no Focus action: browsable like the panel Region's

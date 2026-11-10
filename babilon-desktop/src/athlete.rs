@@ -7,8 +7,9 @@ use bevy::render::mesh::Mesh2d;
 use bevy::render::view::visibility::{InheritedVisibility, Visibility};
 use bevy::sprite::MeshMaterial2d;
 
-use crate::ball::NET_Y;
 use crate::gameplay::{GameWorld, Targets};
+use crate::layout::NET_Y;
+use crate::theme::*;
 
 #[derive(Component)]
 pub(crate) struct PlayerPaddle;
@@ -98,11 +99,11 @@ pub(crate) fn spawn_athlete(
     shirt: Color,
     shirt_dark: Color,
 ) -> Rig {
-    let skin = Color::srgb(0.95, 0.73, 0.56);
-    let navy = Color::srgb(0.08, 0.18, 0.25);
-    let white = Color::srgb(0.94, 1.0, 0.97);
-    let frame = Color::srgb(0.08, 0.20, 0.30);
-    let strings = Color::srgb(0.97, 1.0, 0.98);
+    let skin = SKIN;
+    let navy = KIT_NAVY;
+    let white = KIT_WHITE;
+    let frame = RACKET_FRAME;
+    let strings = RACKET_STRINGS;
     let root = commands
         .spawn((
             Transform::from_xyz(x, y, 2.),
@@ -119,15 +120,7 @@ pub(crate) fn spawn_athlete(
     commands.entity(root).with_children(|p| {
         // ground shadow
         let shadow_mesh = meshes.add(Ellipse::new(30.0, 8.0));
-        mesh_part(
-            p,
-            mats,
-            shadow_mesh,
-            Color::srgb(0.0, 0.15, 0.18),
-            2.,
-            -50.,
-            -0.5,
-        );
+        mesh_part(p, mats, shadow_mesh, BALL_SHADOW, 2., -50., -0.5);
         // legs + shoes (stride animated)
         leg_l = rect_part(p, meshes, mats, 12., 32., navy, -9., -28., 0.1);
         leg_r = rect_part(p, meshes, mats, 12., 32., navy, 9., -28., 0.1);

@@ -14,6 +14,7 @@ mod ball;
 mod gameplay;
 mod hud;
 mod input;
+mod layout;
 mod particles;
 mod scoreboard;
 mod settings;
@@ -41,6 +42,7 @@ mod smoke {
     use crate::particles::*;
     use crate::scoreboard::*;
     use crate::state::AppState;
+    use crate::theme::*;
     use accesskit::Role;
     use babilon_core::*;
     use bevy::a11y::{AccessibilityNode, ActionRequest as A11yActionRequest};
@@ -799,7 +801,7 @@ mod smoke {
             if cell.col != SbCol::Serve {
                 continue;
             }
-            let lit = bg.0 == Color::srgb(0.98, 0.79, 0.40);
+            let lit = bg.0 == GOLD;
             assert_eq!(lit, cell.row == 1, "wrong serve square lit");
             dots += 1;
         }

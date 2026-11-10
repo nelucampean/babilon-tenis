@@ -15,6 +15,7 @@ use crate::ball::*;
 use crate::gameplay::*;
 use crate::hud::*;
 use crate::input::*;
+use crate::layout::*;
 use crate::particles::*;
 use crate::scoreboard::*;
 use crate::settings;
@@ -37,7 +38,7 @@ pub(crate) fn run() {
             .set(WindowPlugin {
                 primary_window: Some(Window {
                     title: "Babilon Tennis — accesibil".into(),
-                    resolution: (1160_f32, 800_f32).into(),
+                    resolution: (WINDOW_W, WINDOW_H).into(),
                     ..default()
                 }),
                 ..default()
@@ -133,45 +134,45 @@ pub(crate) fn setup(
 
     // Court: outer blue surround + inner court + white lines + net.
     // Mirrors `court()` in index.html (longitudinal court, player bottom).
-    let court_w = 460.0;
-    let court_h = 560.0;
+    let court_w = COURT_W;
+    let court_h = COURT_H;
     commands.spawn((
         Sprite {
-            color: Color::srgb(0.03, 0.47, 0.55),
-            custom_size: Some(Vec2::new(court_w + 70.0, court_h + 60.0)),
+            color: COURT_SURROUND,
+            custom_size: Some(Vec2::new(SURROUND_W, SURROUND_H)),
             ..default()
         },
-        Transform::from_xyz(0., 20., -2.),
+        Transform::from_xyz(0., COURT_Y, -2.),
     ));
     commands.spawn((
         Sprite {
-            color: Color::srgb(0.06, 0.49, 0.56),
+            color: COURT_SURFACE,
             custom_size: Some(Vec2::new(court_w, court_h)),
             ..default()
         },
-        Transform::from_xyz(0., 20., -1.),
+        Transform::from_xyz(0., COURT_Y, -1.),
     ));
     // Alternating lane bands, like the web court's striped bands.
-    for i in 0..8 {
+    for i in 0..LANES {
         commands.spawn((
             Sprite {
                 color: if i % 2 == 0 {
-                    Color::srgb(0.05, 0.52, 0.57)
+                    COURT_BAND_A
                 } else {
-                    Color::srgb(0.04, 0.48, 0.53)
+                    COURT_BAND_B
                 },
-                custom_size: Some(Vec2::new(court_w, court_h / 8.0)),
+                custom_size: Some(Vec2::new(court_w, court_h / LANES as f32)),
                 ..default()
             },
             Transform::from_xyz(
                 0.,
-                20. - court_h / 2. + court_h / 16.0 + i as f32 * court_h / 8.0,
+                COURT_Y - court_h / 2. + court_h / 16.0 + i as f32 * court_h / LANES as f32,
                 -0.5,
             ),
         ));
     }
     // Border lines (4 thin white sprites).
-    let line = Color::srgb(0.88, 1.0, 0.96);
+    let line = COURT_LINE;
     let mk_line = |w: f32, h: f32, x: f32, y: f32| {
         (
             Sprite {
@@ -182,24 +183,34 @@ pub(crate) fn setup(
             Transform::from_xyz(x, y, 0.),
         )
     };
-    commands.spawn(mk_line(court_w, 4., 0., 20. + court_h / 2.));
-    commands.spawn(mk_line(court_w, 4., 0., 20. - court_h / 2.));
-    commands.spawn(mk_line(4., court_h, -court_w / 2., 20.));
-    commands.spawn(mk_line(4., court_h, court_w / 2., 20.));
+    commands.spawn(mk_line(court_w, 4., 0., COURT_Y + court_h / 2.));
+    commands.spawn(mk_line(court_w, 4., 0., COURT_Y - court_h / 2.));
+    commands.spawn(mk_line(4., court_h, -court_w / 2., COURT_Y));
+    commands.spawn(mk_line(4., court_h, court_w / 2., COURT_Y));
     // Singles sidelines.
-    commands.spawn(mk_line(3., court_h, -187., 20.));
-    commands.spawn(mk_line(3., court_h, 187., 20.));
+    commands.spawn(mk_line(3., court_h, -SINGLES_X, COURT_Y));
+    commands.spawn(mk_line(3., court_h, SINGLES_X, COURT_Y));
     // Service lines + centre service line.
-    commands.spawn(mk_line(court_w, 3., 0., 20. + court_h * 0.24));
-    commands.spawn(mk_line(court_w, 3., 0., 20. - court_h * 0.24));
-    commands.spawn(mk_line(3., court_h * 0.48, 0., 20.));
+    commands.spawn(mk_line(
+        court_w,
+        3.,
+        0.,
+        COURT_Y + court_h * SERVICE_LINE_RATIO,
+    ));
+    commands.spawn(mk_line(
+        court_w,
+        3.,
+        0.,
+        COURT_Y - court_h * SERVICE_LINE_RATIO,
+    ));
+    commands.spawn(mk_line(3., court_h * SERVICE_LINE_RATIO * 2.0, 0., COURT_Y));
     // Centre marks on both baselines.
-    commands.spawn(mk_line(3., 14., 0., 20. + court_h / 2. - 7.));
-    commands.spawn(mk_line(3., 14., 0., 20. - court_h / 2. + 7.));
+    commands.spawn(mk_line(3., 14., 0., COURT_Y + court_h / 2. - 7.));
+    commands.spawn(mk_line(3., 14., 0., COURT_Y - court_h / 2. + 7.));
     // Net bar + posts (net line sits at NET_Y = 20).
     commands.spawn((
         Sprite {
-            color: Color::srgb(0.04, 0.13, 0.19),
+            color: NET_BAR,
             custom_size: Some(Vec2::new(court_w + 40.0, 12.0)),
             ..default()
         },
@@ -212,7 +223,7 @@ pub(crate) fn setup(
         let x = -court_w / 2. + i as f32 * court_w / 18.0;
         commands.spawn((
             Sprite {
-                color: Color::srgba(0.95, 1.0, 1.0, 0.35),
+                color: NET_SLAT,
                 custom_size: Some(Vec2::new(2., 12.)),
                 ..default()
             },
@@ -234,7 +245,7 @@ pub(crate) fn setup(
             font_size: 24.0,
             ..default()
         },
-        TextColor(Color::srgb(0.61, 0.91, 0.86)),
+        TextColor(BANNER_TEXT),
         Transform::from_xyz(0., 385., 4.),
     ));
 
@@ -245,8 +256,8 @@ pub(crate) fn setup(
         &mut materials,
         0.,
         -280.,
-        Color::srgb(0.96, 0.79, 0.42),
-        Color::srgb(0.66, 0.49, 0.26),
+        PLAYER_BODY,
+        PLAYER_TRIM,
     );
     commands.entity(player_rig.root).insert(PlayerPaddle);
     let opp_rig = spawn_athlete(
@@ -255,8 +266,8 @@ pub(crate) fn setup(
         &mut materials,
         0.,
         320.,
-        Color::srgb(1.0, 0.43, 0.41),
-        Color::srgb(0.72, 0.18, 0.22),
+        OPP_BODY,
+        OPP_TRIM,
     );
     commands.entity(opp_rig.root).insert(OpponentPaddle);
     commands.insert_resource(Rigs {
@@ -266,7 +277,7 @@ pub(crate) fn setup(
 
     // Ball: glowing yellow circle with a seam, plus a ground shadow that
     // tracks the court position while the ball itself arcs with height.
-    let ball_mat = materials.add(ColorMaterial::from(Color::srgb(0.94, 1.0, 0.38)));
+    let ball_mat = materials.add(ColorMaterial::from(BALL));
     let ball = commands
         .spawn((
             Ball,
@@ -278,21 +289,21 @@ pub(crate) fn setup(
     commands.entity(ball).with_children(|p| {
         p.spawn((
             Mesh2d(meshes.add(Rectangle::new(20.0, 2.5))),
-            MeshMaterial2d(materials.add(ColorMaterial::from(Color::srgb(0.82, 0.9, 0.56)))),
+            MeshMaterial2d(materials.add(ColorMaterial::from(BALL_SEAM))),
             Transform::from_xyz(-1., 0., 0.1).with_rotation(Quat::from_rotation_z(-0.6)),
         ));
     });
     commands.spawn((
         BallShadow,
         Mesh2d(meshes.add(Ellipse::new(16.0, 7.0))),
-        MeshMaterial2d(materials.add(ColorMaterial::from(Color::srgb(0.0, 0.15, 0.18)))),
+        MeshMaterial2d(materials.add(ColorMaterial::from(BALL_SHADOW))),
         Transform::from_xyz(0., -260., 2.5),
     ));
     // Shared spark assets.
     commands.insert_resource(ParticleAssets {
         mesh: meshes.add(Circle::new(2.8)),
-        gold: materials.add(ColorMaterial::from(Color::srgb(1.0, 0.89, 0.55))),
-        pale: materials.add(ColorMaterial::from(Color::srgb(0.92, 1.0, 0.67))),
+        gold: materials.add(ColorMaterial::from(SPARK_GOLD)),
+        pale: materials.add(ColorMaterial::from(SPARK_PALE)),
     });
 
     // Accessible HUD: side panel with Inter (full Romanian diacritics),
@@ -302,10 +313,10 @@ pub(crate) fn setup(
     // static labels. The status box is additionally a polite live region so
     // announcements speak automatically. The panel itself is a Region so the
     // block navigates as one group.
-    let gold = Color::srgb(0.98, 0.79, 0.40);
-    let ink = Color::srgb(0.93, 0.97, 0.97);
-    let muted = Color::srgb(0.72, 0.82, 0.85);
-    let panel = Color::srgba(0.03, 0.10, 0.16, 0.96);
+    let gold = GOLD;
+    let ink = INK;
+    let muted = MUTED;
+    let panel = PANEL_BG;
     let reg = fonts.regular.clone();
     let bold = fonts.bold.clone();
     let title_txt = "BABILON TENNIS";
@@ -335,7 +346,7 @@ pub(crate) fn setup(
                 row_gap: Val::Px(4.),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.02, 0.06, 0.11, 0.94)),
+            BackgroundColor(BUG_BG),
             AccessibilityNode::from(sb_node),
         ))
         .with_children(|sb| {
@@ -355,7 +366,7 @@ pub(crate) fn setup(
                 sb_header_cell(h, &fonts, muted, "GAME", 52.);
                 sb_header_cell(h, &fonts, muted, "PCT", 56.);
             });
-            let dim = Color::srgba(0.45, 0.55, 0.60, 0.45);
+            let dim = DIM;
             sb_row(sb, &fonts, ink, dim, 0, "TU", true);
             sb_row(sb, &fonts, ink, dim, 1, "CPU", false);
         });
@@ -374,7 +385,7 @@ pub(crate) fn setup(
             panel_node.add_action(Action::Focus);
             root.spawn((
                 Node {
-                    width: Val::Px(268.),
+                    width: Val::Px(PANEL_W),
                     height: Val::Percent(100.),
                     flex_direction: FlexDirection::Column,
                     padding: UiRect::all(Val::Px(14.)),

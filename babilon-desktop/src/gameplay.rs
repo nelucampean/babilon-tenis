@@ -8,7 +8,8 @@ use rand::Rng;
 use crate::announce::announce;
 use crate::athlete::{OpponentPaddle, PlayerPaddle, Poses};
 use crate::audio::{AudioCtx, AudioMode, Bus, Pending, Sfx, Synth, Volumes};
-use crate::ball::{Ball, BallShadow, Flight, FlightAfter, NET_Y};
+use crate::ball::{Ball, BallShadow, Flight, FlightAfter};
+use crate::layout::NET_Y;
 use crate::particles::{spawn_sparks, ParticleAssets, Particles};
 
 // ---- resources -------------------------------------------------------------
