@@ -144,15 +144,43 @@ pub struct UmpireCall {
 
 /// Every clip key the umpire/crowd can request (mirrors `clips` in index.html).
 pub const ALL_CLIP_KEYS: &[&str] = &[
-    "hit", "out", "fault", "applause", "reaction", "ambient",
-    "advantage-server", "advantage-receiver", "game-server", "game-receiver",
-    "set-server", "set-receiver", "match-server", "match-receiver",
-    "double-fault", "let", "net", "first-service", "second-service",
-    "tie-break", "new-balls", "deuce",
-    "love-all", "love-fifteen", "love-thirty", "love-forty",
-    "fifteen-love", "fifteen-all", "fifteen-thirty", "fifteen-forty",
-    "thirty-love", "thirty-fifteen", "thirty-all", "thirty-forty",
-    "forty-love", "forty-fifteen", "forty-thirty",
+    "hit",
+    "out",
+    "fault",
+    "applause",
+    "reaction",
+    "ambient",
+    "advantage-server",
+    "advantage-receiver",
+    "game-server",
+    "game-receiver",
+    "set-server",
+    "set-receiver",
+    "match-server",
+    "match-receiver",
+    "double-fault",
+    "let",
+    "net",
+    "first-service",
+    "second-service",
+    "tie-break",
+    "new-balls",
+    "deuce",
+    "love-all",
+    "love-fifteen",
+    "love-thirty",
+    "love-forty",
+    "fifteen-love",
+    "fifteen-all",
+    "fifteen-thirty",
+    "fifteen-forty",
+    "thirty-love",
+    "thirty-fifteen",
+    "thirty-all",
+    "thirty-forty",
+    "forty-love",
+    "forty-fifteen",
+    "forty-thirty",
 ];
 
 /// Map a clip key to its MP3 filename. Returns `None` for TTS-only calls.
@@ -281,7 +309,7 @@ impl Match {
         if played == 0 {
             return self.server;
         }
-        if ((played - 1) / 2) % 2 == 0 {
+        if ((played - 1) / 2).is_multiple_of(2) {
             1 - self.server
         } else {
             self.server
@@ -308,7 +336,7 @@ impl Match {
     /// even points-in-game from the right, odd from the left — so the
     /// stance itself is audible/visible before the serve.
     pub fn serve_origin_lane(&self) -> Dir {
-        if (self.pts[0] + self.pts[1]) % 2 == 0 {
+        if (self.pts[0] + self.pts[1]).is_multiple_of(2) {
             1
         } else {
             -1
@@ -599,12 +627,7 @@ impl Match {
     }
 
     /// Chance the return is an outright winner. Mirrors `winnerChance`.
-    pub fn winner_chance(
-        quality: f32,
-        difficulty: Difficulty,
-        alignment: u8,
-        shot: Shot,
-    ) -> f32 {
+    pub fn winner_chance(quality: f32, difficulty: Difficulty, alignment: u8, shot: Shot) -> f32 {
         (0.28 + quality * 0.46 - difficulty.defense() * 0.50
             + f32::from(alignment) * 0.055
             + shot.type_bonus())
@@ -929,13 +952,25 @@ mod tests {
         let mut m = Match::new();
         assert_eq!(m.game_points_display(), ("0".to_string(), "0".to_string()));
         m.pts = [1, 2];
-        assert_eq!(m.game_points_display(), ("15".to_string(), "30".to_string()));
+        assert_eq!(
+            m.game_points_display(),
+            ("15".to_string(), "30".to_string())
+        );
         m.pts = [3, 3];
-        assert_eq!(m.game_points_display(), ("40".to_string(), "40".to_string()));
+        assert_eq!(
+            m.game_points_display(),
+            ("40".to_string(), "40".to_string())
+        );
         m.pts = [4, 3];
-        assert_eq!(m.game_points_display(), ("AD".to_string(), "40".to_string()));
+        assert_eq!(
+            m.game_points_display(),
+            ("AD".to_string(), "40".to_string())
+        );
         m.pts = [3, 4];
-        assert_eq!(m.game_points_display(), ("40".to_string(), "AD".to_string()));
+        assert_eq!(
+            m.game_points_display(),
+            ("40".to_string(), "AD".to_string())
+        );
         m.tiebreak = true;
         m.pts = [5, 6];
         assert_eq!(m.game_points_display(), ("5".to_string(), "6".to_string()));
@@ -965,7 +1000,10 @@ mod tests {
         assert_eq!(u.clip_key.as_deref(), Some("love-fifteen"));
         // Advantage is relative to whoever serves, not to you.
         m.pts = [3, 4];
-        assert_eq!(m.umpire_score().clip_key.as_deref(), Some("advantage-server"));
+        assert_eq!(
+            m.umpire_score().clip_key.as_deref(),
+            Some("advantage-server")
+        );
         m.pts = [4, 3];
         assert_eq!(
             m.umpire_score().clip_key.as_deref(),
@@ -1037,7 +1075,12 @@ mod tests {
                 }
             }
         }
-        for key in ["game-server", "game-receiver", "match-server", "match-receiver"] {
+        for key in [
+            "game-server",
+            "game-receiver",
+            "match-server",
+            "match-receiver",
+        ] {
             assert!(clip_filename(key).is_some());
         }
         // The audio engine's preload list covers every known clip.

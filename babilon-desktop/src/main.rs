@@ -5,12 +5,12 @@
 //! Screen readers get the status text via Bevy UI (AccessKit) + stdout line.
 //! Stereo MP3s live in `assets/sunete/` (copied from the web version).
 
-use babilon_core::{Difficulty, Dir, Match, Phase, RallyOutcome, Shot, LANE_STEP, MAX_DIR};
 use accesskit::{Action, Live, Role};
+use babilon_core::{Difficulty, Dir, Match, Phase, RallyOutcome, Shot, LANE_STEP, MAX_DIR};
 use bevy::a11y::{AccessibilityNode, ActionRequest as A11yActionRequest};
-use bevy::input_focus::{InputDispatchPlugin, InputFocus};
 use bevy::ecs::hierarchy::ChildOf;
 use bevy::ecs::relationship::RelatedSpawnerCommands;
+use bevy::input_focus::{InputDispatchPlugin, InputFocus};
 use bevy::log::LogPlugin;
 use bevy::prelude::*;
 use bevy::render::mesh::Mesh2d;
@@ -509,7 +509,15 @@ fn spawn_athlete(
     commands.entity(root).with_children(|p| {
         // ground shadow
         let shadow_mesh = meshes.add(Ellipse::new(30.0, 8.0));
-        mesh_part(p, mats, shadow_mesh, Color::srgb(0.0, 0.15, 0.18), 2., -50., -0.5);
+        mesh_part(
+            p,
+            mats,
+            shadow_mesh,
+            Color::srgb(0.0, 0.15, 0.18),
+            2.,
+            -50.,
+            -0.5,
+        );
         // legs + shoes (stride animated)
         leg_l = rect_part(p, meshes, mats, 12., 32., navy, -9., -28., 0.1);
         leg_r = rect_part(p, meshes, mats, 12., 32., navy, 9., -28., 0.1);
@@ -576,7 +584,9 @@ fn main() {
                 ..default()
             })
             .set(LogPlugin {
-                filter: "info,symphonia_core=warn,symphonia_bundle_mp3=warn,symphonia_metadata=warn".into(),
+                filter:
+                    "info,symphonia_core=warn,symphonia_bundle_mp3=warn,symphonia_metadata=warn"
+                        .into(),
                 ..default()
             }),
     )
@@ -685,7 +695,11 @@ fn setup(
                 custom_size: Some(Vec2::new(court_w, court_h / 8.0)),
                 ..default()
             },
-            Transform::from_xyz(0., 20. - court_h / 2. + court_h / 16.0 + i as f32 * court_h / 8.0, -0.5),
+            Transform::from_xyz(
+                0.,
+                20. - court_h / 2. + court_h / 16.0 + i as f32 * court_h / 8.0,
+                -0.5,
+            ),
         ));
     }
     // Border lines (4 thin white sprites).
@@ -906,7 +920,11 @@ fn setup(
                 order.push(
                     p.spawn((
                         Text::new(title_txt),
-                        TextFont { font: bold.clone(), font_size: 15.0, ..default() },
+                        TextFont {
+                            font: bold.clone(),
+                            font_size: 15.0,
+                            ..default()
+                        },
                         TextColor(gold),
                         readonly_box("Titlu joc", title_txt),
                     ))
@@ -916,25 +934,39 @@ fn setup(
                     p.spawn((
                         ScoreText,
                         Text::new(score_txt),
-                        TextFont { font: bold.clone(), font_size: 19.0, ..default() },
+                        TextFont {
+                            font: bold.clone(),
+                            font_size: 19.0,
+                            ..default()
+                        },
                         TextColor(ink),
                         readonly_box("Scor", score_txt),
                     ))
                     .id(),
                 );
-                info_status = p.spawn((
-                    StatusText,
-                    Text::new(status_txt),
-                    TextFont { font: reg.clone(), font_size: 19.0, ..default() },
-                    TextColor(ink),
-                    live_box("Anunțuri", status_txt),
-                )).id();
+                info_status = p
+                    .spawn((
+                        StatusText,
+                        Text::new(status_txt),
+                        TextFont {
+                            font: reg.clone(),
+                            font_size: 19.0,
+                            ..default()
+                        },
+                        TextColor(ink),
+                        live_box("Anunțuri", status_txt),
+                    ))
+                    .id();
                 order.push(info_status);
                 order.push(
                     p.spawn((
                         ShotText,
                         Text::new(shot_txt),
-                        TextFont { font: reg.clone(), font_size: 14.0, ..default() },
+                        TextFont {
+                            font: reg.clone(),
+                            font_size: 14.0,
+                            ..default()
+                        },
                         TextColor(ink),
                         readonly_box("Direcție și lovitură", shot_txt),
                     ))
@@ -944,7 +976,11 @@ fn setup(
                     p.spawn((
                         PhaseText,
                         Text::new(phase_txt),
-                        TextFont { font: bold.clone(), font_size: 13.0, ..default() },
+                        TextFont {
+                            font: bold.clone(),
+                            font_size: 13.0,
+                            ..default()
+                        },
                         TextColor(gold),
                         readonly_box("Fază joc", phase_txt),
                     ))
@@ -954,7 +990,11 @@ fn setup(
                     p.spawn((
                         ModeText,
                         Text::new(mode_txt),
-                        TextFont { font: reg.clone(), font_size: 13.0, ..default() },
+                        TextFont {
+                            font: reg.clone(),
+                            font_size: 13.0,
+                            ..default()
+                        },
                         TextColor(muted),
                         readonly_box("Mod audio și volum", mode_txt),
                     ))
@@ -963,7 +1003,11 @@ fn setup(
                 order.push(
                     p.spawn((
                         Text::new(help_txt),
-                        TextFont { font: reg.clone(), font_size: 12.0, ..default() },
+                        TextFont {
+                            font: reg.clone(),
+                            font_size: 12.0,
+                            ..default()
+                        },
                         TextColor(muted),
                         readonly_box("Ajutor taste", help_txt),
                     ))
@@ -973,14 +1017,24 @@ fn setup(
         });
     // Remember the order + live box so `I` can walk screen-reader focus
     // through the whole block and `Esc` returns to the game.
-    commands.insert_resource(InfoPanel { status: info_status, order });
+    commands.insert_resource(InfoPanel {
+        status: info_status,
+        order,
+    });
 }
 
 // ---- game flow (mirrors serve()/incoming()/hit()/point() in JS) ------------
 // Sound comes from `audio::Sfx` (rodio): positioned synth SFX + MP3 clips.
 // `sfx: Option<&Sfx>` is `None` headless, so every call is skip-safe.
 
-fn start_flight(flight: &mut Flight, from: Vec2, to: Vec2, duration: f32, after: FlightAfter, bounce_at: Option<f32>) {
+fn start_flight(
+    flight: &mut Flight,
+    from: Vec2,
+    to: Vec2,
+    duration: f32,
+    after: FlightAfter,
+    bounce_at: Option<f32>,
+) {
     flight.active = true;
     flight.t = 0.0;
     flight.duration = duration;
@@ -1006,7 +1060,9 @@ fn do_serve(
         return;
     }
     if tennis.m.phase == Phase::Finished {
-        tennis.announce("Meci încheiat. Apasă butonul de meci nou (în curând) sau repornește jocul.".into());
+        tennis.announce(
+            "Meci încheiat. Apasă butonul de meci nou (în curând) sau repornește jocul.".into(),
+        );
         return;
     }
     if tennis.m.phase != Phase::Ready {
@@ -1067,11 +1123,19 @@ fn do_incoming(
     // spot, not stranded mid-court): full lane, like the player's run.
     targets.opp_x = side as f32 * LANE_STEP;
     poses.o_swing_until = now + 0.35;
-    tennis.announce(format!("Mingea vine spre {}. Pregătește-te!", dir_label_ro(side)));
+    tennis.announce(format!(
+        "Mingea vine spre {}. Pregătește-te!",
+        dir_label_ro(side)
+    ));
     // Mid-flight guide beep, like the web `setTimeout(..., 490)` — Access
     // mode only; Realist keeps just bounces and the landing cue.
     if mode == AudioMode::Access {
-        pending.0.push(audio::Scheduled { at: now + 0.49, kind: Synth::Guide, pan: side as f32 / MAX_DIR as f32, vol: vols.ball });
+        pending.0.push(audio::Scheduled {
+            at: now + 0.49,
+            kind: Synth::Guide,
+            pan: side as f32 / MAX_DIR as f32,
+            vol: vols.ball,
+        });
     }
     if let Ok(t) = transforms.get(ball) {
         start_flight(
@@ -1129,11 +1193,8 @@ fn start_opponent_serve_signal(
     use babilon_core::dir_label_ro;
     let origin = tennis.m.serve_origin_lane();
     let player_lane = (targets.player_x / LANE_STEP).round() as i8;
-    let target = Match::pick_incoming_side(
-        tennis.difficulty,
-        player_lane,
-        rand::thread_rng().gen(),
-    );
+    let target =
+        Match::pick_incoming_side(tennis.difficulty, player_lane, rand::thread_rng().gen());
     tennis.m.incoming_side = target;
     tennis.opp_serve_origin = origin;
     tennis.opp_serve_target = target;
@@ -1299,7 +1360,9 @@ fn land_opponent_serve(
     particles: &mut Particles,
 ) {
     if Match::opponent_serve_is_ace(tennis.difficulty, rand::thread_rng().gen()) {
-        let r = tennis.m.score_point(1, "As! Serviciul adversarului te-a prins");
+        let r = tennis
+            .m
+            .score_point(1, "As! Serviciul adversarului te-a prins");
         let msg = r.message_ro.clone();
         tennis.announce(msg);
         umpire_call(sfx, vols, &r.umpire);
@@ -1346,7 +1409,9 @@ fn land_serve(
         let server = tennis.m.current_server();
         reset_ball_to_server(transforms, ball, targets, server);
     } else {
-        do_incoming(tennis, targets, poses, now, mode, vols, pending, flight, ball, transforms);
+        do_incoming(
+            tennis, targets, poses, now, mode, vols, pending, flight, ball, transforms,
+        );
     }
 }
 
@@ -1360,19 +1425,19 @@ fn umpire_call(sfx: Option<&Sfx>, vols: &Volumes, call: &babilon_core::UmpireCal
     }
 }
 
-fn land_incoming(
-    sfx: Option<&Sfx>,
-    vols: &Volumes,
-    mode: AudioMode,
-    tennis: &mut Tennis,
-) {
+fn land_incoming(sfx: Option<&Sfx>, vols: &Volumes, mode: AudioMode, tennis: &mut Tennis) {
     tennis.m.phase = Phase::Hit;
     tennis.hit_window = Some(Timer::from_seconds(1.4, TimerMode::Once));
     tennis.announce("Acum lovește!".into());
     // Audible cue (screen readers speak the text above too late): full
     // volume in Access mode, a discreet hint in Realist mode.
     let amp = vols.ball * if mode == AudioMode::Access { 1.0 } else { 0.4 };
-    Sfx::synth(sfx, Synth::Cue, tennis.m.incoming_side as f32 / MAX_DIR as f32, amp);
+    Sfx::synth(
+        sfx,
+        Synth::Cue,
+        tennis.m.incoming_side as f32 / MAX_DIR as f32,
+        amp,
+    );
 }
 
 fn land_return(
@@ -1445,14 +1510,28 @@ fn land_return(
                 let amp = vols.ball * if mode == AudioMode::Access { 1.0 } else { 0.4 };
                 Sfx::synth(sfx, Synth::Cue, pan, amp);
                 if mode == AudioMode::Access {
-                    pending.0.push(audio::Scheduled { at: now + 0.3, kind: Synth::Guide, pan: 0.0, vol: vols.ball });
+                    pending.0.push(audio::Scheduled {
+                        at: now + 0.3,
+                        kind: Synth::Guide,
+                        pan: 0.0,
+                        vol: vols.ball,
+                    });
                 }
                 let from = flight.to;
-                start_flight(flight, from, Vec2::new(targets.player_x, -330.0), 0.65, FlightAfter::CounterLanded, Some(0.55));
+                start_flight(
+                    flight,
+                    from,
+                    Vec2::new(targets.player_x, -330.0),
+                    0.65,
+                    FlightAfter::CounterLanded,
+                    Some(0.55),
+                );
                 tennis.m.phase = Phase::Return;
             }
         }
-        None => do_incoming(tennis, targets, poses, now, mode, vols, pending, flight, ball, transforms),
+        None => do_incoming(
+            tennis, targets, poses, now, mode, vols, pending, flight, ball, transforms,
+        ),
     }
 }
 
@@ -1483,7 +1562,7 @@ fn do_hit(
     };
     // Net rule: Space during Incoming swings only once the ball crossed
     // the net onto your side; sooner presses get a clear "too early".
-    let mut quality = match tennis.m.phase {
+    let quality = match tennis.m.phase {
         Phase::Hit => {
             let timed = match &tennis.hit_window {
                 Some(t) => Match::hit_quality(t.elapsed_secs() * 1000.0),
@@ -1554,7 +1633,12 @@ fn do_hit(
         tennis.m.shot.label_ro(),
         babilon_core::dir_label_ro(tennis.m.dir)
     ));
-    Sfx::synth(sfx, Synth::Hit, tennis.m.incoming_side as f32 / MAX_DIR as f32, vols.ball);
+    Sfx::synth(
+        sfx,
+        Synth::Hit,
+        tennis.m.incoming_side as f32 / MAX_DIR as f32,
+        vols.ball,
+    );
     if let Ok(t) = transforms.get(ball) {
         let at = t.translation.truncate();
         spawn_sparks(commands, pa, particles, at, false, 3);
@@ -1610,7 +1694,12 @@ fn keyboard(
             .map(|t| (t.translation.x / LANE_STEP).round() as i8)
             .unwrap_or(0)
             .clamp(-MAX_DIR, MAX_DIR);
-        Sfx::synth(sfx, Synth::Foe(lane), lane as f32 / MAX_DIR as f32, vols.ball);
+        Sfx::synth(
+            sfx,
+            Synth::Foe(lane),
+            lane as f32 / MAX_DIR as f32,
+            vols.ball,
+        );
         tennis.announce(format!("Adversar: {}.", babilon_core::dir_label_ro(lane)));
         return;
     }
@@ -1669,12 +1758,36 @@ fn keyboard(
     }
     if keys.just_pressed(KeyCode::KeyS) {
         if let Ok(ball) = balls.single() {
-            do_serve(sfx, &vols, &mut tennis, &mut targets, &mut poses, time.elapsed_secs(), &mut flight, ball, &mut transforms);
+            do_serve(
+                sfx,
+                &vols,
+                &mut tennis,
+                &mut targets,
+                &mut poses,
+                time.elapsed_secs(),
+                &mut flight,
+                ball,
+                &mut transforms,
+            );
         }
     }
     if keys.just_pressed(KeyCode::Space) {
         if let (Ok(ball), Ok(player)) = (balls.single(), players.single()) {
-            do_hit(&mut commands, sfx, &vols, &mut tennis, &mut targets, &mut poses, time.elapsed_secs(), &mut flight, ball, player, &mut transforms, &pa, &mut particles);
+            do_hit(
+                &mut commands,
+                sfx,
+                &vols,
+                &mut tennis,
+                &mut targets,
+                &mut poses,
+                time.elapsed_secs(),
+                &mut flight,
+                ball,
+                player,
+                &mut transforms,
+                &pa,
+                &mut particles,
+            );
         }
     }
 }
@@ -1711,9 +1824,21 @@ fn settings_keys(
         // your right ear, your headset/speakers are swapped.
         Sfx::synth(sfx, Synth::Guide, -1.0, vols.ball);
         let now = time.elapsed_secs();
-        pending.0.push(audio::Scheduled { at: now + 0.5, kind: Synth::Guide, pan: 1.0, vol: vols.ball });
+        pending.0.push(audio::Scheduled {
+            at: now + 0.5,
+            kind: Synth::Guide,
+            pan: 1.0,
+            vol: vols.ball,
+        });
         Sfx::synth(sfx, Synth::Bounce, 0.65, vols.ball);
-        Sfx::umpire(sfx, &babilon_core::UmpireCall { text_en: "Fifteen love".into(), clip_key: Some("fifteen-love".into()) }, vols.umpire);
+        Sfx::umpire(
+            sfx,
+            &babilon_core::UmpireCall {
+                text_en: "Fifteen love".into(),
+                clip_key: Some("fifteen-love".into()),
+            },
+            vols.umpire,
+        );
         Sfx::clip(sfx, "applause", 0.0, vols.crowd);
         tennis.announce("Test audio: stânga … apoi dreapta, ricoșeu, arbitru și aplauze.".into());
         return;
@@ -1766,17 +1891,29 @@ fn settings_keys(
             VolGroup::Umpire => vols.umpire,
             VolGroup::Crowd => vols.crowd,
         };
-        tennis.announce(format!("Grup volum: {}. {}%. Z scade, X crește.", vols.group.label_ro(), (v * 100.0) as u32));
+        tennis.announce(format!(
+            "Grup volum: {}. {}%. Z scade, X crește.",
+            vols.group.label_ro(),
+            (v * 100.0) as u32
+        ));
         persist_settings(&tennis, &vols, &mode, sfx);
         return;
     }
     if keys.just_pressed(KeyCode::KeyZ) || keys.just_pressed(KeyCode::KeyX) {
-        let delta = if keys.just_pressed(KeyCode::KeyZ) { -0.1 } else { 0.1 };
+        let delta = if keys.just_pressed(KeyCode::KeyZ) {
+            -0.1
+        } else {
+            0.1
+        };
         let (group, v) = vols.adjust(delta);
         if let Some(s) = sfx {
             s.refresh_ambient(vols.crowd);
         }
-        tennis.announce(format!("Volum {}: {}%.", group.label_ro(), (v * 100.0) as u32));
+        tennis.announce(format!(
+            "Volum {}: {}%.",
+            group.label_ro(),
+            (v * 100.0) as u32
+        ));
         persist_settings(&tennis, &vols, &mode, sfx);
     }
 }
@@ -1788,6 +1925,7 @@ fn settings_keys(
 ///   so JAWS/NVDA jump to the announcements and keep speaking them, then
 ///   to score / shot / phase / volumes on repeated presses.
 /// * `Esc` clears focus back to the game window, so play keys stay first.
+///
 /// Game input reads `ButtonInput` directly, so focus never breaks play.
 fn info_focus_keys(
     keys: Res<ButtonInput<KeyCode>>,
@@ -1965,11 +2103,53 @@ fn ball_flight(
         flight.active = false;
         if let Some(b) = ball {
             match after {
-                FlightAfter::ServeLanded => land_serve(&mut commands, sfx, &vols, *mode, &mut pending, &mut tennis, &mut targets, &mut poses, now, &mut flight, b, &mut transforms, &pa, &mut particles),
+                FlightAfter::ServeLanded => land_serve(
+                    &mut commands,
+                    sfx,
+                    &vols,
+                    *mode,
+                    &mut pending,
+                    &mut tennis,
+                    &mut targets,
+                    &mut poses,
+                    now,
+                    &mut flight,
+                    b,
+                    &mut transforms,
+                    &pa,
+                    &mut particles,
+                ),
                 FlightAfter::IncomingLanded => land_incoming(sfx, &vols, *mode, &mut tennis),
-                FlightAfter::OpponentServeLanded => land_opponent_serve(&mut commands, sfx, &vols, *mode, &mut tennis, &targets, &mut flight, b, &mut transforms, &pa, &mut particles),
+                FlightAfter::OpponentServeLanded => land_opponent_serve(
+                    &mut commands,
+                    sfx,
+                    &vols,
+                    *mode,
+                    &mut tennis,
+                    &targets,
+                    &mut flight,
+                    b,
+                    &mut transforms,
+                    &pa,
+                    &mut particles,
+                ),
                 FlightAfter::ReturnLanded => {
-                    land_return(&mut commands, sfx, &vols, *mode, &mut pending, &mut tennis, &mut targets, &mut poses, now, &mut flight, b, &mut transforms, &pa, &mut particles);
+                    land_return(
+                        &mut commands,
+                        sfx,
+                        &vols,
+                        *mode,
+                        &mut pending,
+                        &mut tennis,
+                        &mut targets,
+                        &mut poses,
+                        now,
+                        &mut flight,
+                        b,
+                        &mut transforms,
+                        &pa,
+                        &mut particles,
+                    );
                 }
                 FlightAfter::OutLanded => {
                     // Miss confirmed where it lands: score + call now, in
@@ -1993,7 +2173,9 @@ fn ball_flight(
                     // His reply beat you: score + call now, in the quiet
                     // window after the flight — the takeoff stayed clean
                     // (racket + Cue + guide + bounce) so it could be heard.
-                    let r = tennis.m.score_point(1, "Contraatac! Adversarul a câștigat punctul");
+                    let r = tennis
+                        .m
+                        .score_point(1, "Contraatac! Adversarul a câștigat punctul");
                     let msg = r.message_ro.clone();
                     tennis.announce(msg);
                     umpire_call(sfx, &vols, &r.umpire);
@@ -2049,8 +2231,18 @@ fn animate_athletes(
 ) {
     let t = time.elapsed_secs();
     let sides = [
-        (&rigs.player, targets.player_x, poses.p_swing_until, poses.p_serve_until),
-        (&rigs.opp, targets.opp_x, poses.o_swing_until, f32::NEG_INFINITY),
+        (
+            &rigs.player,
+            targets.player_x,
+            poses.p_swing_until,
+            poses.p_serve_until,
+        ),
+        (
+            &rigs.opp,
+            targets.opp_x,
+            poses.o_swing_until,
+            f32::NEG_INFINITY,
+        ),
     ];
     for (rig, target_x, swing_until, serve_until) in sides {
         let swinging = t < swing_until;
@@ -2114,7 +2306,9 @@ fn hit_timeout(
         // Distinct from the whiff ("too far") message: here the 1.4s hitting
         // window lapsed with no swing at all (Space never pressed in time),
         // so say so — otherwise a slightly-late press feels like a stolen point.
-        let r = tennis.m.score_point(1, "Timp expirat! N-ai lovit la semnal");
+        let r = tennis
+            .m
+            .score_point(1, "Timp expirat! N-ai lovit la semnal");
         let msg = r.message_ro.clone();
         tennis.announce(msg);
         let sfx = sfx.as_deref();
@@ -2148,13 +2342,55 @@ fn refresh_ui(
     mode: Res<AudioMode>,
     sfx: Option<Res<Sfx>>,
     mut score_q: Query<(&mut Text, Option<&mut AccessibilityNode>), With<ScoreText>>,
-    mut status_q: Query<(&mut Text, Option<&mut AccessibilityNode>), (With<StatusText>, Without<ScoreText>)>,
-    mut shot_q: Query<(&mut Text, Option<&mut AccessibilityNode>), (With<ShotText>, Without<ScoreText>, Without<StatusText>)>,
-    mut phase_q: Query<(&mut Text, Option<&mut AccessibilityNode>), (With<PhaseText>, Without<ScoreText>, Without<StatusText>, Without<ShotText>)>,
-    mut mode_q: Query<(&mut Text, Option<&mut AccessibilityNode>), (With<ModeText>, Without<ScoreText>, Without<StatusText>, Without<ShotText>, Without<PhaseText>)>,
-    mut sb_text_q: Query<(&mut Text, &SbCell), (Without<ScoreText>, Without<StatusText>, Without<ShotText>, Without<PhaseText>, Without<ModeText>)>,
+    mut status_q: Query<
+        (&mut Text, Option<&mut AccessibilityNode>),
+        (With<StatusText>, Without<ScoreText>),
+    >,
+    mut shot_q: Query<
+        (&mut Text, Option<&mut AccessibilityNode>),
+        (With<ShotText>, Without<ScoreText>, Without<StatusText>),
+    >,
+    mut phase_q: Query<
+        (&mut Text, Option<&mut AccessibilityNode>),
+        (
+            With<PhaseText>,
+            Without<ScoreText>,
+            Without<StatusText>,
+            Without<ShotText>,
+        ),
+    >,
+    mut mode_q: Query<
+        (&mut Text, Option<&mut AccessibilityNode>),
+        (
+            With<ModeText>,
+            Without<ScoreText>,
+            Without<StatusText>,
+            Without<ShotText>,
+            Without<PhaseText>,
+        ),
+    >,
+    mut sb_text_q: Query<
+        (&mut Text, &SbCell),
+        (
+            Without<ScoreText>,
+            Without<StatusText>,
+            Without<ShotText>,
+            Without<PhaseText>,
+            Without<ModeText>,
+        ),
+    >,
     mut sb_dot_q: Query<(&mut BackgroundColor, &SbCell)>,
-    mut sb_root_q: Query<&mut AccessibilityNode, (With<SbRoot>, Without<ScoreText>, Without<StatusText>, Without<ShotText>, Without<PhaseText>, Without<ModeText>)>,
+    mut sb_root_q: Query<
+        &mut AccessibilityNode,
+        (
+            With<SbRoot>,
+            Without<ScoreText>,
+            Without<StatusText>,
+            Without<ShotText>,
+            Without<PhaseText>,
+            Without<ModeText>,
+        ),
+    >,
 ) {
     if !tennis.is_changed() && !vols.is_changed() && !mode.is_changed() {
         return;
@@ -2344,7 +2580,8 @@ mod smoke {
             )
                 .chain(),
         );
-        app.world_mut().spawn((Ball, Transform::from_xyz(0., -260., 3.)));
+        app.world_mut()
+            .spawn((Ball, Transform::from_xyz(0., -260., 3.)));
         let player = rig_entities(&mut app, 0., -280.);
         let opp = rig_entities(&mut app, 0., 320.);
         // link rig roots to the paddle markers the systems drive
@@ -2365,7 +2602,9 @@ mod smoke {
         app.world_mut().run_schedule(Update);
         // `reset_all` (not `clear`: that one keeps `pressed`, so a repeat
         // press of the same key would never set `just_pressed` again).
-        app.world_mut().resource_mut::<ButtonInput<KeyCode>>().reset_all();
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
     }
 
     #[test]
@@ -2392,15 +2631,27 @@ mod smoke {
         let mut app = test_app();
         press(&mut app, KeyCode::ArrowLeft);
         assert_eq!(app.world().resource::<Targets>().player_x, -LANE_STEP);
-        assert!(app.world().resource::<Tennis>().status_ro.contains("mijloc-stânga"));
+        assert!(app
+            .world()
+            .resource::<Tennis>()
+            .status_ro
+            .contains("mijloc-stânga"));
         press(&mut app, KeyCode::ArrowLeft);
         assert_eq!(app.world().resource::<Targets>().player_x, -2.0 * LANE_STEP);
-        assert!(app.world().resource::<Tennis>().status_ro.contains("stânga"));
+        assert!(app
+            .world()
+            .resource::<Tennis>()
+            .status_ro
+            .contains("stânga"));
         for _ in 0..4 {
             press(&mut app, KeyCode::ArrowRight);
         }
         assert_eq!(app.world().resource::<Targets>().player_x, 2.0 * LANE_STEP);
-        assert!(app.world().resource::<Tennis>().status_ro.contains("dreapta"));
+        assert!(app
+            .world()
+            .resource::<Tennis>()
+            .status_ro
+            .contains("dreapta"));
     }
 
     #[test]
@@ -2422,10 +2673,18 @@ mod smoke {
         // position, regardless of timing
         let landing_x = app.world().resource::<Flight>().to.x;
         let paddle = app.world().resource::<Rigs>().player.root;
-        app.world_mut().get_mut::<Transform>(paddle).unwrap().translation.x = landing_x + 200.0;
+        app.world_mut()
+            .get_mut::<Transform>(paddle)
+            .unwrap()
+            .translation
+            .x = landing_x + 200.0;
         press(&mut app, KeyCode::Space);
         let t = app.world().resource::<Tennis>();
-        assert_eq!(t.m.phase, Phase::Ready, "whiff ends the point, no return flight");
+        assert_eq!(
+            t.m.phase,
+            Phase::Ready,
+            "whiff ends the point, no return flight"
+        );
         assert_eq!(t.m.pts, [0, 1]);
         assert!(t.status_ro.contains("departe"));
         assert!(t.hit_window.is_none());
@@ -2449,7 +2708,11 @@ mod smoke {
         // too early: ball still on the opponent's side -> clear message, no swing
         press(&mut app, KeyCode::Space);
         assert_eq!(app.world().resource::<Tennis>().m.phase, Phase::Incoming);
-        assert!(app.world().resource::<Tennis>().status_ro.contains("fileul"));
+        assert!(app
+            .world()
+            .resource::<Tennis>()
+            .status_ro
+            .contains("fileul"));
         // ball past the net (progress 0.7, y well below NET_Y): step to
         // where it will land, then the swing fires
         {
@@ -2460,7 +2723,11 @@ mod smoke {
         {
             let landing_x = app.world().resource::<Flight>().to.x;
             let paddle = app.world().resource::<Rigs>().player.root;
-            app.world_mut().get_mut::<Transform>(paddle).unwrap().translation.x = landing_x;
+            app.world_mut()
+                .get_mut::<Transform>(paddle)
+                .unwrap()
+                .translation
+                .x = landing_x;
         }
         press(&mut app, KeyCode::Space);
         assert_eq!(app.world().resource::<Tennis>().m.phase, Phase::Return);
@@ -2470,7 +2737,10 @@ mod smoke {
     fn sound_keys_update_volumes_mode_difficulty() {
         let mut app = test_app();
         press(&mut app, KeyCode::KeyG);
-        assert_eq!(app.world().resource::<Tennis>().difficulty, Difficulty::Hard);
+        assert_eq!(
+            app.world().resource::<Tennis>().difficulty,
+            Difficulty::Hard
+        );
         press(&mut app, KeyCode::KeyM);
         assert_eq!(*app.world().resource::<AudioMode>(), AudioMode::Real);
         press(&mut app, KeyCode::KeyC);
@@ -2481,7 +2751,11 @@ mod smoke {
         assert!((app.world().resource::<Volumes>().umpire - 1.0).abs() < 1e-6);
         // N with no audio engine: answers gracefully, nothing toggles nowhere.
         press(&mut app, KeyCode::KeyN);
-        assert!(app.world().resource::<Tennis>().status_ro.contains("Stereo normal"));
+        assert!(app
+            .world()
+            .resource::<Tennis>()
+            .status_ro
+            .contains("Stereo normal"));
         // T exercises every Sfx path headless (synth + clip with no engine).
         press(&mut app, KeyCode::KeyT);
         // Stereo channel check scheduled: hard-left now, hard-right in 0.5s.
@@ -2530,8 +2804,15 @@ mod smoke {
         let panel = app.world().resource::<InfoPanel>();
         assert!(panel.order.len() >= 2);
         for &e in &panel.order {
-            let node = app.world().get::<AccessibilityNode>(e).expect("box needs a node");
-            assert_eq!(node.role(), Role::MultilineTextInput, "box must be an edit box");
+            let node = app
+                .world()
+                .get::<AccessibilityNode>(e)
+                .expect("box needs a node");
+            assert_eq!(
+                node.role(),
+                Role::MultilineTextInput,
+                "box must be an edit box"
+            );
             assert!(node.is_read_only(), "box must be read-only");
             assert!(
                 node.supports_action(accesskit::Action::Focus),
@@ -2544,7 +2825,8 @@ mod smoke {
     }
 
     #[test]
-    fn full_point_flow_without_free_loss() {        let mut app = test_app();
+    fn full_point_flow_without_free_loss() {
+        let mut app = test_app();
         press(&mut app, KeyCode::KeyS);
         assert_eq!(app.world().resource::<Tennis>().m.phase, Phase::Serve);
         // fast-forward the serve flight to its landing
@@ -2565,7 +2847,11 @@ mod smoke {
         {
             let landing_x = app.world().resource::<Flight>().to.x;
             let paddle = app.world().resource::<Rigs>().player.root;
-            app.world_mut().get_mut::<Transform>(paddle).unwrap().translation.x = landing_x;
+            app.world_mut()
+                .get_mut::<Transform>(paddle)
+                .unwrap()
+                .translation
+                .x = landing_x;
         }
         press(&mut app, KeyCode::Space);
         {
@@ -2592,7 +2878,12 @@ mod smoke {
         let t = app.world().resource::<Tennis>();
         let scored = t.m.pts[0] + t.m.pts[1] == 1;
         let continued = t.m.phase == Phase::Incoming;
-        assert!(scored || continued, "phase={:?} pts={:?}", t.m.phase, t.m.pts);
+        assert!(
+            scored || continued,
+            "phase={:?} pts={:?}",
+            t.m.phase,
+            t.m.pts
+        );
     }
 
     #[test]
@@ -2613,7 +2904,11 @@ mod smoke {
         {
             let landing_x = app.world().resource::<Flight>().to.x;
             let paddle = app.world().resource::<Rigs>().player.root;
-            app.world_mut().get_mut::<Transform>(paddle).unwrap().translation.x = landing_x;
+            app.world_mut()
+                .get_mut::<Transform>(paddle)
+                .unwrap()
+                .translation
+                .x = landing_x;
         }
         press(&mut app, KeyCode::ArrowRight);
         press(&mut app, KeyCode::ArrowRight);
@@ -2655,7 +2950,12 @@ mod smoke {
         let t = app.world().resource::<Tennis>();
         let scored = t.m.pts[0] + t.m.pts[1] == 1;
         let continued = t.m.phase == Phase::Incoming;
-        assert!(scored || continued, "phase={:?} pts={:?}", t.m.phase, t.m.pts);
+        assert!(
+            scored || continued,
+            "phase={:?} pts={:?}",
+            t.m.phase,
+            t.m.pts
+        );
     }
 
     fn ball_xy(app: &mut App) -> (f32, f32) {
@@ -2671,7 +2971,10 @@ mod smoke {
         // the flight, so the flight stays audible): landing awards the point
         // to the opponent, parks the ball, and readies the serve — or stays
         // Finished after match point.
-        for (after, word) in [(FlightAfter::OutLanded, "AUT"), (FlightAfter::CounterLanded, "Contraatac")] {
+        for (after, word) in [
+            (FlightAfter::OutLanded, "AUT"),
+            (FlightAfter::CounterLanded, "Contraatac"),
+        ] {
             let mut app = test_app();
             app.world_mut().resource_mut::<Tennis>().m.phase = Phase::Return;
             {
@@ -2685,10 +2988,17 @@ mod smoke {
                 f.bounce_at = None;
             }
             app.update();
-            assert!(!app.world().resource::<Flight>().active, "{after:?} still flying");
+            assert!(
+                !app.world().resource::<Flight>().active,
+                "{after:?} still flying"
+            );
             let t = app.world().resource::<Tennis>();
             assert_eq!(t.m.pts, [0, 1], "{after:?} point not scored");
-            assert!(t.status_ro.contains(word), "{after:?} call missing: {}", t.status_ro);
+            assert!(
+                t.status_ro.contains(word),
+                "{after:?} call missing: {}",
+                t.status_ro
+            );
             assert_eq!(t.m.phase, Phase::Ready);
             let (bx, by) = ball_xy(&mut app);
             assert_eq!((bx, by), (0.0, -260.0), "{after:?} ball not parked");
@@ -2752,9 +3062,8 @@ mod smoke {
         app.update(); // auto-signal
         assert_eq!(app.world().resource::<Tennis>().m.phase, Phase::Serve);
         // Expire the 1.2s signal wait at once (headless frames tick ms).
-        app.world_mut()
-            .resource_mut::<Tennis>()
-            .opp_serve_timer = Some(Timer::from_seconds(0.0, TimerMode::Once));
+        app.world_mut().resource_mut::<Tennis>().opp_serve_timer =
+            Some(Timer::from_seconds(0.0, TimerMode::Once));
         app.update(); // fires the serve
         {
             let f = app.world().resource::<Flight>();
@@ -2767,7 +3076,11 @@ mod smoke {
         let t = app.world().resource::<Tennis>();
         if t.m.phase == Phase::Hit {
             assert!(t.hit_window.is_some(), "HIT cue without a window");
-            assert!(t.status_ro.contains("lovește"), "no HIT call: {}", t.status_ro);
+            assert!(
+                t.status_ro.contains("lovește"),
+                "no HIT call: {}",
+                t.status_ro
+            );
         } else {
             // Ace (8% on Normal): point to him, parked, ready again.
             assert_eq!(t.m.pts, [0, 1], "phase={:?} pts={:?}", t.m.phase, t.m.pts);
@@ -2797,13 +3110,22 @@ mod smoke {
         // Deuce and advantage render like the broadcast bug.
         m.server = 0;
         m.pts = [3, 3];
-        assert_eq!(scoreboard_texts(&m).points, ["40".to_string(), "40".to_string()]);
+        assert_eq!(
+            scoreboard_texts(&m).points,
+            ["40".to_string(), "40".to_string()]
+        );
         m.pts = [4, 3];
-        assert_eq!(scoreboard_texts(&m).points, ["AD".to_string(), "40".to_string()]);
+        assert_eq!(
+            scoreboard_texts(&m).points,
+            ["AD".to_string(), "40".to_string()]
+        );
         // Tie-break shows bare numbers.
         m.tiebreak = true;
         m.pts = [5, 6];
-        assert_eq!(scoreboard_texts(&m).points, ["5".to_string(), "6".to_string()]);
+        assert_eq!(
+            scoreboard_texts(&m).points,
+            ["5".to_string(), "6".to_string()]
+        );
     }
 
     fn col_name(c: SbCol) -> &'static str {
@@ -2824,11 +3146,17 @@ mod smoke {
         {
             let w = app.world_mut();
             w.spawn((
-                SbCell { row: 0, col: SbCol::Serve },
+                SbCell {
+                    row: 0,
+                    col: SbCol::Serve,
+                },
                 BackgroundColor(Color::WHITE),
             ));
             w.spawn((
-                SbCell { row: 1, col: SbCol::Serve },
+                SbCell {
+                    row: 1,
+                    col: SbCol::Serve,
+                },
                 BackgroundColor(Color::WHITE),
             ));
             for row in [0u8, 1u8] {
@@ -2860,7 +3188,13 @@ mod smoke {
                 (1, SbCol::Points) => "30",
                 _ => continue,
             };
-            assert_eq!(t.as_str(), want, "row={} col={}", cell.row, col_name(cell.col));
+            assert_eq!(
+                t.as_str(),
+                want,
+                "row={} col={}",
+                cell.row,
+                col_name(cell.col)
+            );
             seen += 1;
         }
         assert_eq!(seen, 6, "not every scoreboard cell updated");

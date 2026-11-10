@@ -44,7 +44,15 @@ pub struct Tone {
 
 impl Tone {
     fn new(from: f32, to: f32) -> Self {
-        Self { pos: 0, phase: 0.0, from, to, slide_over: 0.25, total: 0, fade_n: fade_n() }
+        Self {
+            pos: 0,
+            phase: 0.0,
+            from,
+            to,
+            slide_over: 0.25,
+            total: 0,
+            fade_n: fade_n(),
+        }
     }
 
     fn edge_gain(&self) -> f32 {
@@ -106,7 +114,16 @@ pub struct Burst {
 
 impl Burst {
     fn new(cutoff_hi: f32, cutoff_lo: f32) -> Self {
-        Self { rng: 0x12345678, lp_hi: 0.0, lp_lo: 0.0, cutoff_hi, cutoff_lo, pos: 0, total: 0, fade_n: fade_n() }
+        Self {
+            rng: 0x12345678,
+            lp_hi: 0.0,
+            lp_lo: 0.0,
+            cutoff_hi,
+            cutoff_lo,
+            pos: 0,
+            total: 0,
+            fade_n: fade_n(),
+        }
     }
     fn step(&mut self) -> f32 {
         // xorshift white noise in [-1, 1]
@@ -253,7 +270,12 @@ pub struct Volumes {
 impl Default for Volumes {
     fn default() -> Self {
         // Same defaults as the web soundboard: 100 / 100 / 65.
-        Self { ball: 1.0, umpire: 1.0, crowd: 0.65, group: VolGroup::Ball }
+        Self {
+            ball: 1.0,
+            umpire: 1.0,
+            crowd: 0.65,
+            group: VolGroup::Ball,
+        }
     }
 }
 
@@ -301,7 +323,7 @@ fn silence_alsa_chatter() {
         _func: *const std::os::raw::c_char,
         _err: std::os::raw::c_int,
         _fmt: *const std::os::raw::c_char,
-        mut _args: ...,
+        mut _args: ...
     ) {
     }
     unsafe {
@@ -330,7 +352,10 @@ pub struct Sfx {
 fn asset_dirs() -> Vec<std::path::PathBuf> {
     // `cargo run -p babilon-desktop` from the workspace root vs. a packaged
     // `exe` next to `assets/`.
-    ["babilon-desktop/assets/sunete", "assets/sunete"].iter().map(std::path::PathBuf::from).collect()
+    ["babilon-desktop/assets/sunete", "assets/sunete"]
+        .iter()
+        .map(std::path::PathBuf::from)
+        .collect()
 }
 
 fn load_mono(path: &std::path::Path) -> Option<SamplesBuffer<i16>> {
@@ -339,7 +364,9 @@ fn load_mono(path: &std::path::Path) -> Option<SamplesBuffer<i16>> {
     let (ch, rate) = (dec.channels(), dec.sample_rate());
     let raw: Vec<i16> = dec.convert_samples().collect();
     let mono: Vec<i16> = if ch >= 2 {
-        raw.chunks_exact(ch as usize).map(|f| (f.iter().map(|&s| s as i32).sum::<i32>() / ch as i32) as i16).collect()
+        raw.chunks_exact(ch as usize)
+            .map(|f| (f.iter().map(|&s| s as i32).sum::<i32>() / ch as i32) as i16)
+            .collect()
     } else {
         raw
     };
@@ -404,7 +431,12 @@ pub struct Pan<S> {
 impl<S> Pan<S> {
     fn new(input: S, pan: f32) -> Self {
         let (left, right) = pan_gains(pan);
-        Self { input, left, right, pending_right: None }
+        Self {
+            input,
+            left,
+            right,
+            pending_right: None,
+        }
     }
 }
 
@@ -522,7 +554,8 @@ fn audio_thread(rx: std::sync::mpsc::Receiver<Cmd>, crowd: f32) {
                         sink.append(Box::new(Pan::new(
                             with_vol(faded_clip(buf, fade_n()).convert_samples::<f32>(), vol),
                             pan,
-                        )) as Box<dyn Source<Item = f32> + Send>);
+                        ))
+                            as Box<dyn Source<Item = f32> + Send>);
                         sink.detach();
                     }
                 }
@@ -542,7 +575,10 @@ impl Sfx {
         silence_alsa_chatter();
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || audio_thread(rx, crowd));
-        let sfx = Self { tx, swap: Default::default() };
+        let sfx = Self {
+            tx,
+            swap: Default::default(),
+        };
         sfx.refresh_ambient(crowd);
         sfx
     }
@@ -554,7 +590,8 @@ impl Sfx {
     /// Swap left/right channels (swapped headset, OS remap, single-sided
     /// setups). Applies to every positioned sound from here on.
     pub fn set_swapped(&self, swapped: bool) {
-        self.swap.store(swapped, std::sync::atomic::Ordering::Relaxed);
+        self.swap
+            .store(swapped, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn swapped(&self) -> bool {
@@ -562,7 +599,11 @@ impl Sfx {
     }
 
     fn placed(&self, pan: f32) -> f32 {
-        if self.swapped() { -pan } else { pan }
+        if self.swapped() {
+            -pan
+        } else {
+            pan
+        }
     }
 
     pub fn refresh_ambient(&self, crowd: f32) {
@@ -581,7 +622,11 @@ impl Sfx {
     pub fn clip(sfx: Option<&Self>, key: &str, pan: f32, vol: f32) {
         if let Some(s) = sfx {
             let pan = s.placed(pan);
-            s.send(Cmd::Clip { key: key.to_string(), pan, vol });
+            s.send(Cmd::Clip {
+                key: key.to_string(),
+                pan,
+                vol,
+            });
         }
     }
 
@@ -615,7 +660,10 @@ pub fn list_output_devices() -> Vec<String> {
 /// 139). Kept as documentation + unit test of the rule.
 #[allow(dead_code)]
 fn is_unsafe_output(name: &str) -> bool {
-    name.starts_with("hw:") || name.starts_with("dsnoop") || name.starts_with("oss") || name == "null"
+    name.starts_with("hw:")
+        || name.starts_with("dsnoop")
+        || name.starts_with("oss")
+        || name == "null"
 }
 
 // ---- delayed cues (the web `setTimeout(..., 490)` guide beep) --------------
@@ -664,10 +712,25 @@ mod tests {
     }
 
     #[test]
-    fn raw_hw_and_capture_devices_are_filtered() {        for bad in ["hw:CARD=HDMI,DEV=8", "hw:CARD=PCH,DEV=0", "dsnoop:CARD=PCH,DEV=0", "oss", "null"] {
+    fn raw_hw_and_capture_devices_are_filtered() {
+        for bad in [
+            "hw:CARD=HDMI,DEV=8",
+            "hw:CARD=PCH,DEV=0",
+            "dsnoop:CARD=PCH,DEV=0",
+            "oss",
+            "null",
+        ] {
             assert!(is_unsafe_output(bad), "{bad}");
         }
-        for good in ["default", "pulse", "pipewire", "plughw:CARD=HDMI,DEV=3", "hdmi:CARD=HDMI,DEV=1", "dmix:CARD=PCH,DEV=0", "front:CARD=PCH,DEV=0"] {
+        for good in [
+            "default",
+            "pulse",
+            "pipewire",
+            "plughw:CARD=HDMI,DEV=3",
+            "hdmi:CARD=HDMI,DEV=1",
+            "dmix:CARD=PCH,DEV=0",
+            "front:CARD=PCH,DEV=0",
+        ] {
             assert!(!is_unsafe_output(good), "{good}");
         }
     }
@@ -739,8 +802,14 @@ mod tests {
         // Abrupt edges are heard as pop/click on every blip. 5ms raised
         // edges in, silence out (first sample is exactly 0).
         for (name, mut src) in [
-            ("tone", Box::new(tone(440.0, 880.0, 0.16, 1.0)) as Box<dyn Source<Item = f32>>),
-            ("bounce", Box::new(bounce_src()) as Box<dyn Source<Item = f32>>),
+            (
+                "tone",
+                Box::new(tone(440.0, 880.0, 0.16, 1.0)) as Box<dyn Source<Item = f32>>,
+            ),
+            (
+                "bounce",
+                Box::new(bounce_src()) as Box<dyn Source<Item = f32>>,
+            ),
             ("hit", Box::new(hit_src()) as Box<dyn Source<Item = f32>>),
         ] {
             let first = src.next().unwrap_or(1.0);
@@ -775,7 +844,8 @@ mod tests {
     }
 
     #[test]
-    fn synth_lengths_match_their_durations() {        // 0.16s @44100 mono -> 7056 samples -> 14112 stereo samples.
+    fn synth_lengths_match_their_durations() {
+        // 0.16s @44100 mono -> 7056 samples -> 14112 stereo samples.
         // Any off-by-N here would mean wrong playback speed.
         let n = Pan::new(tone(440.0, 440.0, 0.16, 1.0), 0.0).count();
         assert_eq!(n, 7056 * 2, "{n}");
@@ -797,7 +867,8 @@ mod tests {
     }
 
     #[test]
-    fn pan_duplicates_each_sample_to_both_channels() {        // Center pan: every L/R pair must carry the SAME mono sample
+    fn pan_duplicates_each_sample_to_both_channels() {
+        // Center pan: every L/R pair must carry the SAME mono sample
         // (splitting samples across channels instead halves durations).
         let out: Vec<f32> = Pan::new(tone(440.0, 440.0, 0.02, 1.0), 0.0).collect();
         assert_eq!(out.len() % 2, 0);

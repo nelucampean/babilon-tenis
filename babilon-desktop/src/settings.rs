@@ -43,7 +43,10 @@ fn load_from(path: &std::path::Path) -> Persisted {
         Ok(text) => match toml::from_str(&text) {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("[SETUP] ignoring corrupt settings file {}: {e}", path.display());
+                eprintln!(
+                    "[SETUP] ignoring corrupt settings file {}: {e}",
+                    path.display()
+                );
                 Persisted::default()
             }
         },
@@ -55,7 +58,12 @@ fn load_from(path: &std::path::Path) -> Persisted {
 pub fn save(difficulty: Difficulty, mode: AudioMode, vols: &Volumes, swap_stereo: bool) {
     save_to(
         &settings_path(),
-        &Persisted { difficulty, mode, vols: *vols, swap_stereo },
+        &Persisted {
+            difficulty,
+            mode,
+            vols: *vols,
+            swap_stereo,
+        },
     );
 }
 
@@ -91,7 +99,12 @@ mod tests {
         let custom = Persisted {
             difficulty: Difficulty::Hard,
             mode: AudioMode::Real,
-            vols: Volumes { ball: 1.2, umpire: 0.5, crowd: 0.0, group: crate::audio::VolGroup::Crowd },
+            vols: Volumes {
+                ball: 1.2,
+                umpire: 0.5,
+                crowd: 0.0,
+                group: crate::audio::VolGroup::Crowd,
+            },
             swap_stereo: true,
         };
         save_to(&path, &custom);
