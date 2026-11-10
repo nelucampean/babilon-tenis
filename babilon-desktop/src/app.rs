@@ -49,57 +49,12 @@ pub(crate) fn run() {
                 ..default()
             }),
     )
-    .init_state::<AppState>()
-    .init_resource::<Announcer>()
-    .add_event::<Announce>()
-    .insert_resource(Tennis {
-        m: Match::new(),
-        hit_window: None,
-        opp_serve_timer: None,
-        opp_serve_origin: 1,
-        opp_serve_target: 0,
-    })
-    .insert_resource(Flight::default())
-    .insert_resource(Targets {
-        player_x: 0.0,
-        opp_x: 0.0,
-    })
-    .insert_resource(Poses::default())
-    .insert_resource(Particles::default())
-    .insert_resource(settings)
-    .insert_resource(Pending::default())
     // Input focus tracking: required for ANY AccessKit tree updates
     // (bevy_winit skips them entirely without `InputFocus`), and lets
     // `I` / `Esc` move screen-reader focus between game and info panel.
     .add_plugins(InputDispatchPlugin)
-    .add_systems(Startup, setup)
-    // chained: keyboard Space and the 1.4s miss-timer race otherwise,
-    // and flight landings must run before the timeout check.
-    .add_systems(
-        Update,
-        (
-            pause_key,
-            (
-                keyboard,
-                opponent_serve_tick,
-                drift_paddles,
-                ball_flight,
-                particle_fx,
-                hit_timeout,
-                animate_athletes,
-            )
-                .chain()
-                .run_if(in_state(AppState::Playing)),
-            settings_keys,
-            settings::autosave,
-            info_focus_keys,
-            a11y_focus_requests,
-            audio::play_pending,
-            announce::announce_sink,
-            refresh_ui,
-        )
-            .chain(),
-    );
+    .add_systems(Startup, setup);
+    build_app(&mut app, settings);
     // Stadium sound on its own thread (silent without an audio device).
     // Systems take `Option<Res<Sfx>>`; headless tests simply omit it.
     let sfx = Sfx::start(settings.vols.crowd);
@@ -107,6 +62,60 @@ pub(crate) fn run() {
     app.insert_resource(sfx);
     eprintln!("[APP] starting Bevy loop");
     app.run();
+}
+
+/// Register the game's state, resources and Update schedule.
+///
+/// Plugins and the Startup scene stay with the caller, so the headless
+/// test harness can boot the exact same schedule with MinimalPlugins
+/// instead of re-listing every system (and drifting out of sync).
+pub(crate) fn build_app(app: &mut App, settings: settings::Settings) {
+    // chained: keyboard Space and the 1.4s miss-timer race otherwise,
+    // and flight landings must run before the timeout check.
+    app.init_state::<AppState>()
+        .init_resource::<Announcer>()
+        .add_event::<Announce>()
+        .insert_resource(Tennis {
+            m: Match::new(),
+            hit_window: None,
+            opp_serve_timer: None,
+            opp_serve_origin: 1,
+            opp_serve_target: 0,
+        })
+        .insert_resource(Flight::default())
+        .insert_resource(Targets {
+            player_x: 0.0,
+            opp_x: 0.0,
+        })
+        .insert_resource(Poses::default())
+        .insert_resource(Particles::default())
+        .insert_resource(settings)
+        .insert_resource(Pending::default())
+        .add_systems(
+            Update,
+            (
+                pause_key,
+                (
+                    keyboard,
+                    opponent_serve_tick,
+                    drift_paddles,
+                    ball_flight,
+                    particle_fx,
+                    hit_timeout,
+                    animate_athletes,
+                )
+                    .chain()
+                    .run_if(in_state(AppState::Playing)),
+                settings_keys,
+                settings::autosave,
+                info_focus_keys,
+                a11y_focus_requests,
+                audio::play_pending,
+                announce::announce_sink,
+                refresh_ui,
+            )
+                .chain(),
+        );
 }
 
 pub(crate) fn setup(
