@@ -3,10 +3,15 @@
 //! WebAudio synth in `index.html`) plus the 37 umpire/crowd MP3s and a
 //! looping crowd ambience — all through `rodio`.
 //!
-//! Volume groups (minge / arbitru / public), audio mode (accesibil /
-//! realist) and difficulty are driven by keys; see `keyboard` in `main.rs`.
+//! Volume groups (minge / arbitru / public) and audio mode (accesibil /
+//! realist) live in `Settings`; gameplay emits `Sound` events and
+//! `audio_service` resolves them against those settings and the engine.
 
-use bevy::prelude::{Res, ResMut, Resource, Time};
+use crate::settings::Settings;
+use crate::sound::Sound;
+
+use bevy::ecs::change_detection::DetectChanges;
+use bevy::prelude::{EventReader, Res, ResMut, Resource, Time};
 use rodio::buffer::SamplesBuffer;
 use rodio::cpal::traits::{DeviceTrait, HostTrait};
 use rodio::source::Source;
@@ -205,7 +210,7 @@ fn bounce_src() -> impl Source<Item = f32> + Send + 'static {
 }
 
 /// Which synth to play.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Synth {
     Guide,
     Cue,
@@ -686,108 +691,85 @@ pub enum Bus {
     Crowd,
 }
 
-/// Everything a gameplay rule needs to make a sound, in one argument.
+/// Resolve a sound request against the current settings and engine.
 ///
-/// Built at the top of a system from the `Sfx` handle, the volume group
-/// mixer, the audio mode and the delayed-cue queue. Keeping this out of
-/// every function signature is what removes the old `sfx / vols / mode /
-/// pending` quartet from the serve, rally and landing code.
-pub struct AudioCtx<'a> {
-    sfx: Option<&'a Sfx>,
-    vols: Volumes,
-    pub mode: AudioMode,
-    pending: &'a mut Pending,
-}
-
-impl<'a> AudioCtx<'a> {
-    pub fn new(
-        sfx: Option<&'a Sfx>,
-        vols: Volumes,
-        mode: AudioMode,
-        pending: &'a mut Pending,
-    ) -> Self {
-        Self {
-            sfx,
-            vols,
-            mode,
-            pending,
+/// This is the *only* system that knows about rodio: gameplay sends
+/// [`Sound`] events, the service applies group volumes, Access/Realist
+/// mode, stereo swap, ambience and the delayed-cue queue. Without an
+/// `Sfx` resource (headless tests) every request is safely dropped, while
+/// the queue and events still behave exactly as in the real app.
+pub(crate) fn audio_service(
+    mut sounds: EventReader<Sound>,
+    time: Res<Time>,
+    settings: Res<Settings>,
+    sfx: Option<Res<Sfx>>,
+    mut pending: ResMut<Pending>,
+) {
+    // Settings are the single source of truth for stereo swap and crowd
+    // ambience; mirror any change onto the engine once per changed frame.
+    if settings.is_changed() {
+        if let Some(s) = sfx.as_deref() {
+            s.set_swapped(settings.swap_stereo);
+            s.refresh_ambient(settings.vols.crowd);
         }
     }
+    let vol = |bus: Bus| match bus {
+        Bus::Ball => settings.vols.ball,
+        Bus::Umpire => settings.vols.umpire,
+        Bus::Crowd => settings.vols.crowd,
+    };
+    let sfx = sfx.as_deref();
 
-    pub fn vol(&self, bus: Bus) -> f32 {
-        match bus {
-            Bus::Ball => self.vols.ball,
-            Bus::Umpire => self.vols.umpire,
-            Bus::Crowd => self.vols.crowd,
-        }
-    }
-
-    pub fn is_access(&self) -> bool {
-        self.mode == AudioMode::Access
-    }
-
-    /// Positioned synth SFX at the group's current volume.
-    pub fn synth(&self, kind: Synth, pan: f32, bus: Bus) {
-        Sfx::synth(self.sfx, kind, pan, self.vol(bus));
-    }
-
-    /// Positioned synth SFX at an explicit amplitude (used by the
-    /// mode-dependent HIT cue).
-    pub fn synth_vol(&self, kind: Synth, pan: f32, vol: f32) {
-        Sfx::synth(self.sfx, kind, pan, vol);
-    }
-
-    /// Positioned MP3 clip at the group's current volume.
-    pub fn clip(&self, key: &str, pan: f32, bus: Bus) {
-        Sfx::clip(self.sfx, key, pan, self.vol(bus));
-    }
-
-    /// Umpire voice, always centered: MP3 when we have one, console TTS
-    /// fallback for tie-break scores (same as the web version).
-    pub fn umpire(&self, call: &babilon_core::UmpireCall) {
-        if call.clip_key.is_some() {
-            Sfx::umpire(self.sfx, call, self.vols.umpire);
-        } else {
-            println!("[ARBITRU TTS] {}", call.text_en);
-        }
-    }
-
-    /// Queue a cue to play `secs` from now (the web's `setTimeout` cues).
-    pub fn schedule(&mut self, at: f32, kind: Synth, pan: f32, bus: Bus) {
-        self.pending.0.push(Scheduled {
-            at,
-            kind,
-            pan,
-            vol: self.vol(bus),
-        });
-    }
-
-    /// Mid-flight guide beep — Access mode only; Realist keeps just the
-    /// bounces and the landing cue.
-    pub fn guide(&mut self, at: f32, pan: f32) {
-        if self.is_access() {
-            self.schedule(at, Synth::Guide, pan, Bus::Ball);
-        }
-    }
-
-    /// Landing HIT cue: full volume in Access mode, a discreet hint in
-    /// Realist mode.
-    pub fn cue_amp(&self) -> f32 {
-        self.vol(Bus::Ball) * if self.is_access() { 1.0 } else { 0.4 }
-    }
-}
-
-/// Fires due scheduled beeps. Runs in the `Update` chain after `hit_timeout`.
-pub fn play_pending(time: Res<Time>, sfx: Option<Res<Sfx>>, mut pending: ResMut<Pending>) {
+    // Fire due scheduled beeps (the web `setTimeout` cues).
     let now = time.elapsed_secs();
     pending.0.retain(|p| {
         if now >= p.at {
-            Sfx::synth(sfx.as_deref(), p.kind, p.pan, p.vol);
+            Sfx::synth(sfx, p.kind, p.pan, p.vol);
             false
         } else {
             true
         }
     });
+
+    for ev in sounds.read() {
+        match ev {
+            Sound::Synth { kind, pan, bus } => Sfx::synth(sfx, *kind, *pan, vol(*bus)),
+            Sound::Cue { pan } => {
+                let amp = vol(Bus::Ball)
+                    * if settings.mode == AudioMode::Access {
+                        1.0
+                    } else {
+                        0.4
+                    };
+                Sfx::synth(sfx, Synth::Cue, *pan, amp);
+            }
+            Sound::Clip { key, pan, bus } => Sfx::clip(sfx, key, *pan, vol(*bus)),
+            Sound::Umpire(call) => {
+                if call.clip_key.is_some() {
+                    Sfx::umpire(sfx, call, vol(Bus::Umpire));
+                } else {
+                    // Tie-break scores have no MP3: console TTS fallback.
+                    println!("[ARBITRU TTS] {}", call.text_en);
+                }
+            }
+            Sound::Guide { at, pan } => {
+                if settings.mode == AudioMode::Access {
+                    pending.0.push(Scheduled {
+                        at: *at,
+                        kind: Synth::Guide,
+                        pan: *pan,
+                        vol: vol(Bus::Ball),
+                    });
+                }
+            }
+            Sound::Schedule { at, kind, pan, bus } => pending.0.push(Scheduled {
+                at: *at,
+                kind: *kind,
+                pan: *pan,
+                vol: vol(*bus),
+            }),
+        }
+    }
 }
 
 #[cfg(test)]

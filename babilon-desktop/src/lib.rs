@@ -18,6 +18,7 @@ mod layout;
 mod particles;
 mod scoreboard;
 mod settings;
+mod sound;
 mod state;
 mod text;
 mod theme;
@@ -44,6 +45,7 @@ mod smoke {
     use crate::particles::*;
     use crate::scoreboard::*;
     use crate::settings::Settings;
+    use crate::sound::Sound;
     use crate::state::AppState;
     use crate::theme::*;
     use accesskit::Role;
@@ -52,6 +54,15 @@ mod smoke {
     use bevy::input::InputPlugin;
     use bevy::input_focus::InputFocus;
     use bevy::prelude::*;
+
+    /// Test-only mirror of the sound event stream: proves gameplay emits
+    /// events without any audio engine, and that they reach the service.
+    #[derive(Resource, Default)]
+    struct CapturedSounds(Vec<Sound>);
+
+    fn capture_sounds(mut events: EventReader<Sound>, mut out: ResMut<CapturedSounds>) {
+        out.0.extend(events.read().cloned());
+    }
 
     fn rig_entities(app: &mut App, x: f32, y: f32) -> Rig {
         let root = app.world_mut().spawn(Transform::from_xyz(x, y, 2.)).id();
@@ -78,6 +89,8 @@ mod smoke {
         // Exactly the real schedule/resources, minus plugins and the
         // Startup scene (see `app::build_app`).
         crate::app::build_app(&mut app, Settings::default());
+        app.init_resource::<CapturedSounds>();
+        app.add_systems(Update, capture_sounds.after(audio_service));
         app.insert_resource(ParticleAssets {
             mesh: Handle::default(),
             gold: Handle::default(),
@@ -138,7 +151,7 @@ mod smoke {
         bevy::ecs::system::assert_is_system(ball_flight);
         bevy::ecs::system::assert_is_system(particle_fx);
         bevy::ecs::system::assert_is_system(hit_timeout);
-        bevy::ecs::system::assert_is_system(audio::play_pending);
+        bevy::ecs::system::assert_is_system(audio::audio_service);
         bevy::ecs::system::assert_is_system(refresh_ui);
         bevy::ecs::system::assert_is_system(animate_athletes);
         let mut app = test_app();
@@ -302,19 +315,45 @@ mod smoke {
         assert!((app.world().resource::<Settings>().vols.umpire - 1.1).abs() < 1e-6);
         press(&mut app, KeyCode::KeyZ);
         assert!((app.world().resource::<Settings>().vols.umpire - 1.0).abs() < 1e-6);
-        // N with no audio engine: answers gracefully, nothing toggles nowhere.
+        // N is a real Settings toggle now; the audio service mirrors it
+        // onto the engine (absent headless), and both directions announce.
+        press(&mut app, KeyCode::KeyN);
+        assert!(app
+            .world()
+            .resource::<Announcer>()
+            .status_ro
+            .contains("Stereo inversat"));
+        assert!(app.world().resource::<Settings>().swap_stereo);
         press(&mut app, KeyCode::KeyN);
         assert!(app
             .world()
             .resource::<Announcer>()
             .status_ro
             .contains("Stereo normal"));
+        assert!(!app.world().resource::<Settings>().swap_stereo);
         // T exercises every Sfx path headless (synth + clip with no engine).
         press(&mut app, KeyCode::KeyT);
         // Stereo channel check scheduled: hard-left now, hard-right in 0.5s.
         assert_eq!(app.world().resource::<Pending>().0.len(), 1);
         let p = &app.world().resource::<Pending>().0[0];
         assert!((p.pan - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn gameplay_sends_sound_events_headless() {
+        let mut app = test_app();
+        press(&mut app, KeyCode::ArrowLeft);
+        let got = &app.world().resource::<CapturedSounds>().0;
+        assert!(
+            got.iter().any(|s| matches!(
+                s,
+                Sound::Synth {
+                    kind: Synth::Lane(-1),
+                    ..
+                }
+            )),
+            "no lane blip event: {got:?}"
+        );
     }
 
     #[test]

@@ -3,8 +3,9 @@ use babilon_core::{Difficulty, Phase, Shot, LANE_STEP, MAX_DIR};
 use bevy::prelude::*;
 
 use crate::announce::{announce, Announcer};
-use crate::audio::{AudioCtx, AudioMode, Bus, Pending, Sfx, Synth, VolGroup};
+use crate::audio::{AudioMode, Bus, Synth, VolGroup};
 use crate::ball::Flight;
+use crate::sound::SoundExt;
 
 use crate::gameplay::{do_hit, do_serve, GameWorld, Tennis};
 
@@ -61,16 +62,12 @@ pub(crate) fn keyboard(
         mut flight,
         mut particles,
         pa,
-        sfx,
-        settings,
-        mut pending,
         balls,
         players,
         opps,
         mut transforms,
         ..
     } = world;
-    let mut audio = AudioCtx::new(sfx.as_deref(), settings.vols, settings.mode, &mut pending);
     if keys.just_pressed(KeyCode::KeyR) {
         // Repeat what was last announced, then the current score line so
         // the listener keeps their bearings.
@@ -88,7 +85,7 @@ pub(crate) fn keyboard(
             .map(|t| (t.translation.x / LANE_STEP).round() as i8)
             .unwrap_or(0)
             .clamp(-MAX_DIR, MAX_DIR);
-        audio.synth(Synth::Foe(lane), lane as f32 / MAX_DIR as f32, Bus::Ball);
+        commands.synth(Synth::Foe(lane), lane as f32 / MAX_DIR as f32, Bus::Ball);
         announce(
             &mut commands,
             format!("Adversar: {}.", text::dir_label_ro(lane)),
@@ -103,7 +100,7 @@ pub(crate) fn keyboard(
         targets.player_x = d as f32 * LANE_STEP;
         // Position blip: pitch (low/mid/high) + pan both encode the lane,
         // so you always know where you stand without looking.
-        audio.synth(Synth::Lane(d), d as f32 / MAX_DIR as f32, Bus::Ball);
+        commands.synth(Synth::Lane(d), d as f32 / MAX_DIR as f32, Bus::Ball);
         announce(
             &mut commands,
             format!("Direcție: {}", text::dir_label_ro(d)),
@@ -113,7 +110,7 @@ pub(crate) fn keyboard(
         tennis.m.nudge_dir(1);
         let d = tennis.m.dir;
         targets.player_x = d as f32 * LANE_STEP;
-        audio.synth(Synth::Lane(d), d as f32 / MAX_DIR as f32, Bus::Ball);
+        commands.synth(Synth::Lane(d), d as f32 / MAX_DIR as f32, Bus::Ball);
         announce(
             &mut commands,
             format!("Direcție: {}", text::dir_label_ro(d)),
@@ -135,7 +132,6 @@ pub(crate) fn keyboard(
         if let Ok(ball) = balls.single() {
             do_serve(
                 &mut commands,
-                &mut audio,
                 &mut tennis,
                 &mut targets,
                 &mut poses,
@@ -150,7 +146,6 @@ pub(crate) fn keyboard(
         if let (Ok(ball), Ok(player)) = (balls.single(), players.single()) {
             do_hit(
                 &mut commands,
-                &mut audio,
                 &mut tennis,
                 &mut targets,
                 &mut poses,
@@ -177,24 +172,20 @@ pub(crate) fn settings_keys(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     mut settings: ResMut<Settings>,
-    mut pending: ResMut<Pending>,
-    sfx: Option<Res<Sfx>>,
 ) {
-    let sfx = sfx.as_deref();
-    let mut audio = AudioCtx::new(sfx, settings.vols, settings.mode, &mut pending);
     if keys.just_pressed(KeyCode::KeyT) {
         // Stadium test + stereo channel check: hard-left blip now,
         // hard-right blip half a second later. If "stânga" comes out of
         // your right ear, your headset/speakers are swapped.
-        audio.synth(Synth::Guide, -1.0, Bus::Ball);
+        commands.synth(Synth::Guide, -1.0, Bus::Ball);
         let now = time.elapsed_secs();
-        audio.schedule(now + 0.5, Synth::Guide, 1.0, Bus::Ball);
-        audio.synth(Synth::Bounce, 0.65, Bus::Ball);
-        audio.umpire(&babilon_core::UmpireCall {
+        commands.schedule(now + 0.5, Synth::Guide, 1.0, Bus::Ball);
+        commands.synth(Synth::Bounce, 0.65, Bus::Ball);
+        commands.umpire(&babilon_core::UmpireCall {
             text_en: "Fifteen love".into(),
             clip_key: Some("fifteen-love".into()),
         });
-        audio.clip("applause", 0.0, Bus::Crowd);
+        commands.clip("applause", 0.0, Bus::Crowd);
         announce(
             &mut commands,
             "Test audio: stânga … apoi dreapta, ricoșeu, arbitru și aplauze.",
@@ -229,21 +220,15 @@ pub(crate) fn settings_keys(
     if keys.just_pressed(KeyCode::KeyN) {
         // Stereo L/R swap for swapped headsets, OS remaps, or single-sided
         // hearing. Verify with T: the "stânga" blip must come from the left.
-        if let Some(s) = sfx {
-            let swapped = !s.swapped();
-            s.set_swapped(swapped);
-            settings.swap_stereo = swapped;
-            announce(
-                &mut commands,
-                if swapped {
-                    "Stereo inversat (stânga-dreapta)."
-                } else {
-                    "Stereo normal."
-                },
-            );
-        } else {
-            announce(&mut commands, "Stereo normal (fără motor audio).");
-        }
+        settings.swap_stereo = !settings.swap_stereo;
+        announce(
+            &mut commands,
+            if settings.swap_stereo {
+                "Stereo inversat (stânga-dreapta)."
+            } else {
+                "Stereo normal."
+            },
+        );
         return;
     }
     if keys.just_pressed(KeyCode::KeyC) {
@@ -270,9 +255,6 @@ pub(crate) fn settings_keys(
             0.1
         };
         let (group, v) = settings.vols.adjust(delta);
-        if let Some(s) = sfx {
-            s.refresh_ambient(settings.vols.crowd);
-        }
         announce(
             &mut commands,
             format!("Volum {}: {}%.", group.label_ro(), (v * 100.0) as u32),

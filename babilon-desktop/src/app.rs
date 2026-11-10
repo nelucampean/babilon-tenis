@@ -19,6 +19,7 @@ use crate::layout::*;
 use crate::particles::*;
 use crate::scoreboard::*;
 use crate::settings;
+use crate::sound::Sound;
 use crate::state::AppState;
 use crate::theme::*;
 use babilon_core::Match;
@@ -56,9 +57,9 @@ pub(crate) fn run() {
     .add_systems(Startup, setup);
     build_app(&mut app, settings);
     // Stadium sound on its own thread (silent without an audio device).
-    // Systems take `Option<Res<Sfx>>`; headless tests simply omit it.
+    // Only `audio::audio_service` takes `Option<Res<Sfx>>`; headless tests
+    // simply omit it and the service drops every request safely.
     let sfx = Sfx::start(settings.vols.crowd);
-    sfx.set_swapped(settings.swap_stereo);
     app.insert_resource(sfx);
     eprintln!("[APP] starting Bevy loop");
     app.run();
@@ -75,6 +76,7 @@ pub(crate) fn build_app(app: &mut App, settings: settings::Settings) {
     app.init_state::<AppState>()
         .init_resource::<Announcer>()
         .add_event::<Announce>()
+        .add_event::<Sound>()
         .insert_resource(Tennis {
             m: Match::new(),
             hit_window: None,
@@ -110,7 +112,7 @@ pub(crate) fn build_app(app: &mut App, settings: settings::Settings) {
                 settings::autosave,
                 info_focus_keys,
                 a11y_focus_requests,
-                audio::play_pending,
+                audio::audio_service,
                 announce::announce_sink,
                 refresh_ui,
             )

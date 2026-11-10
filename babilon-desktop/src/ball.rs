@@ -3,11 +3,12 @@ use babilon_core::{Dir, Phase, Shot};
 use bevy::prelude::*;
 use rand::Rng;
 
-use crate::audio::{AudioCtx, Bus, Synth};
+use crate::audio::{Bus, Synth};
 use crate::gameplay::{
     land_incoming, land_opponent_serve, land_return, land_serve, reset_ball_to_server, GameWorld,
 };
 use crate::particles::spawn_sparks;
+use crate::sound::SoundExt;
 use crate::text;
 
 #[derive(Component)]
@@ -84,15 +85,12 @@ pub(crate) fn ball_flight(world: GameWorld) {
         mut flight,
         mut particles,
         pa,
-        sfx,
         settings,
-        mut pending,
         balls,
         shadows,
         mut transforms,
         ..
     } = world;
-    let mut audio = AudioCtx::new(sfx.as_deref(), settings.vols, settings.mode, &mut pending);
 
     let ball = balls.single().ok();
     let shadow = shadows.single().ok();
@@ -129,7 +127,7 @@ pub(crate) fn ball_flight(world: GameWorld) {
             flight.bounced = true;
             let pan = (pos.x / 160.0).clamp(-1.0, 1.0);
             spawn_sparks(&mut commands, &pa, &mut particles, pos, false, 4);
-            audio.synth(Synth::Bounce, pan, Bus::Ball);
+            commands.synth(Synth::Bounce, pan, Bus::Ball);
         }
     }
 
@@ -141,7 +139,6 @@ pub(crate) fn ball_flight(world: GameWorld) {
             match after {
                 FlightAfter::ServeLanded => land_serve(
                     &mut commands,
-                    &mut audio,
                     &mut tennis,
                     &mut targets,
                     &mut poses,
@@ -153,10 +150,9 @@ pub(crate) fn ball_flight(world: GameWorld) {
                     &mut particles,
                     settings.difficulty,
                 ),
-                FlightAfter::IncomingLanded => land_incoming(&mut commands, &audio, &mut tennis),
+                FlightAfter::IncomingLanded => land_incoming(&mut commands, &mut tennis),
                 FlightAfter::OpponentServeLanded => land_opponent_serve(
                     &mut commands,
-                    &mut audio,
                     &mut tennis,
                     &targets,
                     &mut flight,
@@ -169,7 +165,6 @@ pub(crate) fn ball_flight(world: GameWorld) {
                 FlightAfter::ReturnLanded => {
                     land_return(
                         &mut commands,
-                        &mut audio,
                         &mut tennis,
                         &mut targets,
                         &mut poses,
@@ -189,10 +184,10 @@ pub(crate) fn ball_flight(world: GameWorld) {
                     let (r, msg) =
                         text::score_and_message(&mut tennis.m, 1, "AUT! Mingea ta a ieșit afară");
                     crate::announce::announce(&mut commands, msg);
-                    audio.umpire(&r.umpire);
-                    audio.synth(Synth::Bad, 0.0, Bus::Ball);
+                    commands.umpire(&r.umpire);
+                    commands.synth(Synth::Bad, 0.0, Bus::Ball);
                     if rand::thread_rng().gen::<f32>() < 0.40 {
-                        audio.clip("reaction", 0.0, Bus::Crowd);
+                        commands.clip("reaction", 0.0, Bus::Crowd);
                     }
                     let server = tennis.m.current_server();
                     reset_ball_to_server(&mut transforms, b, &targets, server);
@@ -210,10 +205,10 @@ pub(crate) fn ball_flight(world: GameWorld) {
                         "Contraatac! Adversarul a câștigat punctul",
                     );
                     crate::announce::announce(&mut commands, msg);
-                    audio.umpire(&r.umpire);
-                    audio.synth(Synth::Bad, 0.0, Bus::Ball);
+                    commands.umpire(&r.umpire);
+                    commands.synth(Synth::Bad, 0.0, Bus::Ball);
                     if rand::thread_rng().gen::<f32>() < 0.40 {
-                        audio.clip("reaction", 0.0, Bus::Crowd);
+                        commands.clip("reaction", 0.0, Bus::Crowd);
                     }
                     let server = tennis.m.current_server();
                     reset_ball_to_server(&mut transforms, b, &targets, server);

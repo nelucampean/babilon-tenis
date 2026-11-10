@@ -7,11 +7,12 @@ use rand::Rng;
 
 use crate::announce::announce;
 use crate::athlete::{OpponentPaddle, PlayerPaddle, Poses};
-use crate::audio::{AudioCtx, Bus, Pending, Sfx, Synth};
+use crate::audio::{Bus, Synth};
 use crate::ball::{Ball, BallShadow, Flight, FlightAfter};
 use crate::layout::NET_Y;
 use crate::particles::{spawn_sparks, ParticleAssets, Particles};
 use crate::settings::Settings;
+use crate::sound::SoundExt;
 use crate::text;
 
 // ---- resources -------------------------------------------------------------
@@ -60,7 +61,6 @@ pub(crate) fn start_flight(
 
 pub(crate) fn do_serve(
     commands: &mut Commands,
-    audio: &mut AudioCtx,
     tennis: &mut Tennis,
     targets: &mut Targets,
     poses: &mut Poses,
@@ -90,8 +90,8 @@ pub(crate) fn do_serve(
     poses.p_serve_until = now + 0.42;
     announce(&mut *commands, "Serviciu!");
     let pan = tennis.m.dir as f32 / MAX_DIR as f32;
-    audio.clip("hit", pan, Bus::Ball);
-    audio.synth(Synth::Hit, pan, Bus::Ball);
+    commands.clip("hit", pan, Bus::Ball);
+    commands.synth(Synth::Hit, pan, Bus::Ball);
     if let Ok(t) = transforms.get(ball) {
         start_flight(
             flight,
@@ -106,7 +106,6 @@ pub(crate) fn do_serve(
 
 pub(crate) fn do_incoming(
     commands: &mut Commands,
-    audio: &mut AudioCtx,
     tennis: &mut Tennis,
     targets: &mut Targets,
     poses: &mut Poses,
@@ -141,7 +140,7 @@ pub(crate) fn do_incoming(
         ),
     );
     // Mid-flight guide beep, like the web `setTimeout(..., 490)`.
-    audio.guide(now + 0.49, side as f32 / MAX_DIR as f32);
+    commands.guide(now + 0.49, side as f32 / MAX_DIR as f32);
     if let Ok(t) = transforms.get(ball) {
         start_flight(
             flight,
@@ -186,7 +185,6 @@ pub(crate) fn reset_ball_to_server(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn start_opponent_serve_signal(
     commands: &mut Commands,
-    audio: &mut AudioCtx,
     tennis: &mut Tennis,
     targets: &mut Targets,
     poses: &mut Poses,
@@ -221,9 +219,9 @@ pub(crate) fn start_opponent_serve_signal(
     // 3-bip countdown to his serve: one now, two scheduled. Same lane
     // coding as the O-key locator, panned at his feet.
     let pan = origin as f32 / MAX_DIR as f32;
-    audio.synth(Synth::Foe(origin), pan, Bus::Ball);
-    audio.schedule(now + 0.4, Synth::Foe(origin), pan, Bus::Ball);
-    audio.schedule(now + 0.8, Synth::Foe(origin), pan, Bus::Ball);
+    commands.synth(Synth::Foe(origin), pan, Bus::Ball);
+    commands.schedule(now + 0.4, Synth::Foe(origin), pan, Bus::Ball);
+    commands.schedule(now + 0.8, Synth::Foe(origin), pan, Bus::Ball);
     tennis.opp_serve_timer = Some(Timer::from_seconds(1.2, TimerMode::Once));
 }
 
@@ -236,7 +234,6 @@ pub(crate) fn start_opponent_serve_signal(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn fire_opponent_serve(
     commands: &mut Commands,
-    audio: &mut AudioCtx,
     tennis: &mut Tennis,
     targets: &mut Targets,
     now: f32,
@@ -256,8 +253,8 @@ pub(crate) fn fire_opponent_serve(
         ),
     );
     let pan = origin as f32 / MAX_DIR as f32;
-    audio.synth(Synth::Hit, pan, Bus::Ball);
-    audio.guide(now + 0.49, target as f32 / MAX_DIR as f32);
+    commands.synth(Synth::Hit, pan, Bus::Ball);
+    commands.guide(now + 0.49, target as f32 / MAX_DIR as f32);
     if let Ok(t) = transforms.get(ball) {
         start_flight(
             flight,
@@ -273,7 +270,7 @@ pub(crate) fn fire_opponent_serve(
 /// One `SystemParam` bundle for the gameplay systems.
 ///
 /// The serve/rally/hit systems share the same world: match state, timers,
-/// the flight, particles, audio, and the three entity searches. Bundling
+/// the flight, particles, and the three entity searches. Bundling
 /// them keeps system signatures short and gives future screens a single
 /// place to add state.
 #[derive(SystemParam)]
@@ -286,9 +283,7 @@ pub(crate) struct GameWorld<'w, 's> {
     pub flight: ResMut<'w, Flight>,
     pub particles: ResMut<'w, Particles>,
     pub pa: Res<'w, ParticleAssets>,
-    pub sfx: Option<Res<'w, Sfx>>,
     pub settings: Res<'w, Settings>,
-    pub pending: ResMut<'w, Pending>,
     pub balls: Query<'w, 's, Entity, With<Ball>>,
     pub players: Query<'w, 's, Entity, With<PlayerPaddle>>,
     pub opps: Query<'w, 's, Entity, With<OpponentPaddle>>,
@@ -308,14 +303,11 @@ pub(crate) fn opponent_serve_tick(world: GameWorld) {
         mut targets,
         mut poses,
         mut flight,
-        sfx,
         settings,
-        mut pending,
         balls,
         mut transforms,
         ..
     } = world;
-    let mut audio = AudioCtx::new(sfx.as_deref(), settings.vols, settings.mode, &mut pending);
     if tennis.m.phase == Phase::Finished {
         return;
     }
@@ -327,7 +319,6 @@ pub(crate) fn opponent_serve_tick(world: GameWorld) {
                 if let Ok(ball) = balls.single() {
                     fire_opponent_serve(
                         &mut commands,
-                        &mut audio,
                         &mut tennis,
                         &mut targets,
                         time.elapsed_secs(),
@@ -345,7 +336,6 @@ pub(crate) fn opponent_serve_tick(world: GameWorld) {
         if let Ok(ball) = balls.single() {
             start_opponent_serve_signal(
                 &mut commands,
-                &mut audio,
                 &mut tennis,
                 &mut targets,
                 &mut poses,
@@ -363,7 +353,6 @@ pub(crate) fn opponent_serve_tick(world: GameWorld) {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn land_opponent_serve(
     commands: &mut Commands,
-    audio: &mut AudioCtx,
     tennis: &mut Tennis,
     targets: &Targets,
     flight: &mut Flight,
@@ -377,23 +366,22 @@ pub(crate) fn land_opponent_serve(
         let (r, msg) =
             text::score_and_message(&mut tennis.m, 1, "As! Serviciul adversarului te-a prins");
         announce(&mut *commands, msg);
-        audio.umpire(&r.umpire);
-        audio.synth(Synth::Bad, 0.0, Bus::Ball);
+        commands.umpire(&r.umpire);
+        commands.synth(Synth::Bad, 0.0, Bus::Ball);
         if rand::thread_rng().gen::<f32>() < 0.40 {
-            audio.clip("reaction", 0.0, Bus::Crowd);
+            commands.clip("reaction", 0.0, Bus::Crowd);
         }
         spawn_sparks(commands, pa, particles, flight.to, true, 7);
         flight.active = false;
         let server = tennis.m.current_server();
         reset_ball_to_server(transforms, ball, targets, server);
     } else {
-        land_incoming(commands, audio, tennis);
+        land_incoming(commands, tennis);
     }
 }
 
 pub(crate) fn land_serve(
     commands: &mut Commands,
-    audio: &mut AudioCtx,
     tennis: &mut Tennis,
     targets: &mut Targets,
     poses: &mut Poses,
@@ -410,36 +398,31 @@ pub(crate) fn land_serve(
     if Match::serve_is_ace(difficulty, roll) {
         let (r, msg) = text::score_and_message(&mut tennis.m, 0, "As!");
         announce(&mut *commands, msg);
-        audio.umpire(&r.umpire);
-        audio.clip("applause", 0.0, Bus::Crowd);
-        audio.synth(Synth::Good, 0.0, Bus::Ball);
+        commands.umpire(&r.umpire);
+        commands.clip("applause", 0.0, Bus::Crowd);
+        commands.synth(Synth::Good, 0.0, Bus::Ball);
         spawn_sparks(commands, pa, particles, flight.to, true, 7);
         flight.active = false;
         let server = tennis.m.current_server();
         reset_ball_to_server(transforms, ball, targets, server);
     } else {
         do_incoming(
-            commands, audio, tennis, targets, poses, now, flight, ball, transforms, difficulty,
+            commands, tennis, targets, poses, now, flight, ball, transforms, difficulty,
         );
     }
 }
 
-pub(crate) fn land_incoming(commands: &mut Commands, audio: &AudioCtx, tennis: &mut Tennis) {
+pub(crate) fn land_incoming(commands: &mut Commands, tennis: &mut Tennis) {
     tennis.m.phase = Phase::Hit;
     tennis.hit_window = Some(Timer::from_seconds(1.4, TimerMode::Once));
     announce(&mut *commands, "Acum lovește!");
     // Audible cue (screen readers speak the text above too late): full
     // volume in Access mode, a discreet hint in Realist mode.
-    audio.synth_vol(
-        Synth::Cue,
-        tennis.m.incoming_side as f32 / MAX_DIR as f32,
-        audio.cue_amp(),
-    );
+    commands.cue(tennis.m.incoming_side as f32 / MAX_DIR as f32);
 }
 
 pub(crate) fn land_return(
     commands: &mut Commands,
-    audio: &mut AudioCtx,
     tennis: &mut Tennis,
     targets: &mut Targets,
     poses: &mut Poses,
@@ -469,9 +452,9 @@ pub(crate) fn land_return(
             if w == 0 {
                 let (r, msg) = text::score_and_message(&mut tennis.m, 0, "Punct câștigat");
                 announce(&mut *commands, msg);
-                audio.umpire(&r.umpire);
-                audio.clip("applause", 0.0, Bus::Crowd);
-                audio.synth(Synth::Good, 0.0, Bus::Ball);
+                commands.umpire(&r.umpire);
+                commands.clip("applause", 0.0, Bus::Crowd);
+                commands.synth(Synth::Good, 0.0, Bus::Ball);
                 spawn_sparks(commands, pa, particles, flight.to, true, 7);
                 flight.active = false;
                 let server = tennis.m.current_server();
@@ -482,7 +465,7 @@ pub(crate) fn land_return(
                 // 90ms Hit drowns under the voice + Bad + crowd starting in
                 // the same frame and the ball is never heard.
                 announce(&mut *commands, "AUT! Mingea a ieșit.");
-                audio.clip("out", 0.0, Bus::Umpire);
+                commands.clip("out", 0.0, Bus::Umpire);
                 let from = flight.to;
                 let to = if rand::thread_rng().gen::<f32>() < 0.5 {
                     Vec2::new(from.x, 392.0)
@@ -500,9 +483,9 @@ pub(crate) fn land_return(
                 announce(&mut *commands, "Contraatac! Mingea vine spre tine!");
                 poses.o_swing_until = now + 0.45;
                 let pan = (flight.to.x / 160.0).clamp(-1.0, 1.0);
-                audio.synth(Synth::Hit, pan, Bus::Ball);
-                audio.synth_vol(Synth::Cue, pan, audio.cue_amp());
-                audio.guide(now + 0.3, 0.0);
+                commands.synth(Synth::Hit, pan, Bus::Ball);
+                commands.cue(pan);
+                commands.guide(now + 0.3, 0.0);
                 let from = flight.to;
                 start_flight(
                     flight,
@@ -516,14 +499,13 @@ pub(crate) fn land_return(
             }
         }
         None => do_incoming(
-            commands, audio, tennis, targets, poses, now, flight, ball, transforms, difficulty,
+            commands, tennis, targets, poses, now, flight, ball, transforms, difficulty,
         ),
     }
 }
 
 pub(crate) fn do_hit(
     commands: &mut Commands,
-    audio: &mut AudioCtx,
     tennis: &mut Tennis,
     targets: &mut Targets,
     poses: &mut Poses,
@@ -601,8 +583,8 @@ pub(crate) fn do_hit(
         tennis.hit_window = None;
         let (r, msg) = text::score_and_message(&mut tennis.m, 1, "Ai ratat mingea");
         announce(&mut *commands, format!("{msg} Erai prea departe de minge."));
-        audio.umpire(&r.umpire);
-        audio.synth(Synth::Bad, 0.0, Bus::Ball);
+        commands.umpire(&r.umpire);
+        commands.synth(Synth::Bad, 0.0, Bus::Ball);
         flight.active = false;
         // Whiff target deref: `targets` is `&mut Targets` here.
         let server = tennis.m.current_server();
@@ -623,7 +605,7 @@ pub(crate) fn do_hit(
             text::dir_label_ro(tennis.m.dir)
         ),
     );
-    audio.synth(
+    commands.synth(
         Synth::Hit,
         tennis.m.incoming_side as f32 / MAX_DIR as f32,
         Bus::Ball,
@@ -652,14 +634,10 @@ pub(crate) fn hit_timeout(world: GameWorld) {
         time,
         mut tennis,
         targets,
-        sfx,
-        settings,
-        mut pending,
         balls,
         mut transforms,
         ..
     } = world;
-    let audio = AudioCtx::new(sfx.as_deref(), settings.vols, settings.mode, &mut pending);
     let expired = match &mut tennis.hit_window {
         Some(timer) => {
             timer.tick(time.delta());
@@ -675,8 +653,8 @@ pub(crate) fn hit_timeout(world: GameWorld) {
         let (r, msg) =
             text::score_and_message(&mut tennis.m, 1, "Timp expirat! N-ai lovit la semnal");
         announce(&mut commands, msg);
-        audio.umpire(&r.umpire);
-        audio.synth(Synth::Bad, 0.0, Bus::Ball);
+        commands.umpire(&r.umpire);
+        commands.synth(Synth::Bad, 0.0, Bus::Ball);
         // park ball for the next serve (was left mid-court)
         if let Ok(ball) = balls.single() {
             let server = tennis.m.current_server();

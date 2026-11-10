@@ -11,7 +11,6 @@ use bevy::prelude::*;
 
 use crate::a11y::{refresh_box, set_node_value};
 use crate::announce::Announcer;
-use crate::audio::Sfx;
 use crate::gameplay::Tennis;
 use crate::scoreboard::{scoreboard_texts, SbCell, SbCol, SbRoot};
 use crate::settings::Settings;
@@ -74,7 +73,6 @@ pub(crate) struct HudWorld<'w, 's> {
     state: Res<'w, State<AppState>>,
     announcer: Res<'w, Announcer>,
     settings: Res<'w, Settings>,
-    sfx: Option<Res<'w, Sfx>>,
     lines: Query<
         'w,
         's,
@@ -100,7 +98,7 @@ pub(crate) fn refresh_ui(mut hud: HudWorld) {
     }
 
     let diff_label = text::difficulty_label_ro(hud.settings.difficulty);
-    let swapped = hud.sfx.as_deref().map(|s| s.swapped()).unwrap_or(false);
+    let swapped = hud.settings.swap_stereo;
     let lines = Lines {
         score: format!(
             "Seturi {} – {}\nGame-uri {} – {}\n{}",
