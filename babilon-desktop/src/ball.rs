@@ -3,13 +3,11 @@ use babilon_core::{Dir, Phase, Shot};
 use bevy::prelude::*;
 use rand::Rng;
 
-use crate::athlete::Poses;
-use crate::audio::{AudioMode, Pending, Sfx, Synth, Volumes};
+use crate::audio::{AudioCtx, Bus, Synth};
 use crate::gameplay::{
-    land_incoming, land_opponent_serve, land_return, land_serve, reset_ball_to_server, umpire_call,
-    Targets, Tennis,
+    land_incoming, land_opponent_serve, land_return, land_serve, reset_ball_to_server, GameWorld,
 };
-use crate::particles::{spawn_sparks, ParticleAssets, Particles};
+use crate::particles::spawn_sparks;
 
 #[derive(Component)]
 pub(crate) struct Ball;
@@ -77,24 +75,27 @@ pub(crate) enum FlightAfter {
 pub(crate) const NET_Y: f32 = 20.0;
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn ball_flight(
-    mut commands: Commands,
-    time: Res<Time>,
-    mut tennis: ResMut<Tennis>,
-    mut targets: ResMut<Targets>,
-    mut poses: ResMut<Poses>,
-    vols: Res<Volumes>,
-    mode: Res<AudioMode>,
-    mut pending: ResMut<Pending>,
-    sfx: Option<Res<Sfx>>,
-    pa: Res<ParticleAssets>,
-    mut particles: ResMut<Particles>,
-    mut flight: ResMut<Flight>,
-    balls: Query<Entity, With<Ball>>,
-    shadows: Query<Entity, With<BallShadow>>,
-    mut transforms: Query<&mut Transform>,
-) {
-    let sfx = sfx.as_deref();
+pub(crate) fn ball_flight(world: GameWorld) {
+    let GameWorld {
+        mut commands,
+        time,
+        mut tennis,
+        mut targets,
+        mut poses,
+        mut flight,
+        mut particles,
+        pa,
+        sfx,
+        vols,
+        mode,
+        mut pending,
+        balls,
+        shadows,
+        mut transforms,
+        ..
+    } = world;
+    let mut audio = AudioCtx::new(sfx.as_deref(), *vols, *mode, &mut pending);
+
     let ball = balls.single().ok();
     let shadow = shadows.single().ok();
     if !flight.active || tennis.paused {
@@ -130,7 +131,7 @@ pub(crate) fn ball_flight(
             flight.bounced = true;
             let pan = (pos.x / 160.0).clamp(-1.0, 1.0);
             spawn_sparks(&mut commands, &pa, &mut particles, pos, false, 4);
-            Sfx::synth(sfx, Synth::Bounce, pan, vols.ball);
+            audio.synth(Synth::Bounce, pan, Bus::Ball);
         }
     }
 
@@ -142,10 +143,7 @@ pub(crate) fn ball_flight(
             match after {
                 FlightAfter::ServeLanded => land_serve(
                     &mut commands,
-                    sfx,
-                    &vols,
-                    *mode,
-                    &mut pending,
+                    &mut audio,
                     &mut tennis,
                     &mut targets,
                     &mut poses,
@@ -156,12 +154,10 @@ pub(crate) fn ball_flight(
                     &pa,
                     &mut particles,
                 ),
-                FlightAfter::IncomingLanded => land_incoming(sfx, &vols, *mode, &mut tennis),
+                FlightAfter::IncomingLanded => land_incoming(&audio, &mut tennis),
                 FlightAfter::OpponentServeLanded => land_opponent_serve(
                     &mut commands,
-                    sfx,
-                    &vols,
-                    *mode,
+                    &mut audio,
                     &mut tennis,
                     &targets,
                     &mut flight,
@@ -173,10 +169,7 @@ pub(crate) fn ball_flight(
                 FlightAfter::ReturnLanded => {
                     land_return(
                         &mut commands,
-                        sfx,
-                        &vols,
-                        *mode,
-                        &mut pending,
+                        &mut audio,
                         &mut tennis,
                         &mut targets,
                         &mut poses,
@@ -195,10 +188,10 @@ pub(crate) fn ball_flight(
                     let r = tennis.m.score_point(1, "AUT! Mingea ta a ieșit afară");
                     let msg = r.message_ro.clone();
                     tennis.announce(msg);
-                    umpire_call(sfx, &vols, &r.umpire);
-                    Sfx::synth(sfx, Synth::Bad, 0.0, vols.ball);
+                    audio.umpire(&r.umpire);
+                    audio.synth(Synth::Bad, 0.0, Bus::Ball);
                     if rand::thread_rng().gen::<f32>() < 0.40 {
-                        Sfx::clip(sfx, "reaction", 0.0, vols.crowd);
+                        audio.clip("reaction", 0.0, Bus::Crowd);
                     }
                     let server = tennis.m.current_server();
                     reset_ball_to_server(&mut transforms, b, &targets, server);
@@ -215,10 +208,10 @@ pub(crate) fn ball_flight(
                         .score_point(1, "Contraatac! Adversarul a câștigat punctul");
                     let msg = r.message_ro.clone();
                     tennis.announce(msg);
-                    umpire_call(sfx, &vols, &r.umpire);
-                    Sfx::synth(sfx, Synth::Bad, 0.0, vols.ball);
+                    audio.umpire(&r.umpire);
+                    audio.synth(Synth::Bad, 0.0, Bus::Ball);
                     if rand::thread_rng().gen::<f32>() < 0.40 {
-                        Sfx::clip(sfx, "reaction", 0.0, vols.crowd);
+                        audio.clip("reaction", 0.0, Bus::Crowd);
                     }
                     let server = tennis.m.current_server();
                     reset_ball_to_server(&mut transforms, b, &targets, server);

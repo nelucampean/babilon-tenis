@@ -2,33 +2,35 @@
 use babilon_core::{Difficulty, Phase, Shot, LANE_STEP, MAX_DIR};
 use bevy::prelude::*;
 
-use crate::athlete::{OpponentPaddle, PlayerPaddle, Poses};
-use crate::audio::{self, AudioMode, Pending, Sfx, Synth, VolGroup, Volumes};
-use crate::ball::{Ball, Flight};
-use crate::gameplay::{do_hit, do_serve, Targets, Tennis};
-use crate::particles::{ParticleAssets, Particles};
+use crate::audio::{AudioCtx, AudioMode, Bus, Pending, Sfx, Synth, VolGroup, Volumes};
+
+use crate::gameplay::{do_hit, do_serve, GameWorld, Tennis};
+
 use crate::settings;
 
 // ---- systems ---------------------------------------------------------------
 
-pub(crate) fn keyboard(
-    mut commands: Commands,
-    time: Res<Time>,
-    keys: Res<ButtonInput<KeyCode>>,
-    mut tennis: ResMut<Tennis>,
-    mut targets: ResMut<Targets>,
-    mut poses: ResMut<Poses>,
-    vols: Res<Volumes>,
-    sfx: Option<Res<Sfx>>,
-    pa: Res<ParticleAssets>,
-    mut particles: ResMut<Particles>,
-    mut flight: ResMut<Flight>,
-    balls: Query<Entity, With<Ball>>,
-    players: Query<Entity, With<PlayerPaddle>>,
-    opps: Query<Entity, With<OpponentPaddle>>,
-    mut transforms: Query<&mut Transform>,
-) {
-    let sfx = sfx.as_deref();
+pub(crate) fn keyboard(world: GameWorld, keys: Res<ButtonInput<KeyCode>>) {
+    let GameWorld {
+        mut commands,
+        time,
+        mut tennis,
+        mut targets,
+        mut poses,
+        mut flight,
+        mut particles,
+        pa,
+        sfx,
+        vols,
+        mode,
+        mut pending,
+        balls,
+        players,
+        opps,
+        mut transforms,
+        ..
+    } = world;
+    let mut audio = AudioCtx::new(sfx.as_deref(), *vols, *mode, &mut pending);
     if keys.just_pressed(KeyCode::KeyR) {
         // history_ro already ends with the score line + serve prompt, so
         // repeating it verbatim avoids announcing the score twice.
@@ -46,12 +48,7 @@ pub(crate) fn keyboard(
             .map(|t| (t.translation.x / LANE_STEP).round() as i8)
             .unwrap_or(0)
             .clamp(-MAX_DIR, MAX_DIR);
-        Sfx::synth(
-            sfx,
-            Synth::Foe(lane),
-            lane as f32 / MAX_DIR as f32,
-            vols.ball,
-        );
+        audio.synth(Synth::Foe(lane), lane as f32 / MAX_DIR as f32, Bus::Ball);
         tennis.announce(format!("Adversar: {}.", babilon_core::dir_label_ro(lane)));
         return;
     }
@@ -86,14 +83,14 @@ pub(crate) fn keyboard(
         targets.player_x = d as f32 * LANE_STEP;
         // Position blip: pitch (low/mid/high) + pan both encode the lane,
         // so you always know where you stand without looking.
-        Sfx::synth(sfx, Synth::Lane(d), d as f32 / MAX_DIR as f32, vols.ball);
+        audio.synth(Synth::Lane(d), d as f32 / MAX_DIR as f32, Bus::Ball);
         tennis.announce(format!("Direcție: {}", babilon_core::dir_label_ro(d)));
     }
     if keys.just_pressed(KeyCode::ArrowRight) {
         tennis.m.nudge_dir(1);
         let d = tennis.m.dir;
         targets.player_x = d as f32 * LANE_STEP;
-        Sfx::synth(sfx, Synth::Lane(d), d as f32 / MAX_DIR as f32, vols.ball);
+        audio.synth(Synth::Lane(d), d as f32 / MAX_DIR as f32, Bus::Ball);
         tennis.announce(format!("Direcție: {}", babilon_core::dir_label_ro(d)));
     }
     if keys.just_pressed(KeyCode::Digit1) {
@@ -111,8 +108,7 @@ pub(crate) fn keyboard(
     if keys.just_pressed(KeyCode::KeyS) {
         if let Ok(ball) = balls.single() {
             do_serve(
-                sfx,
-                &vols,
+                &mut audio,
                 &mut tennis,
                 &mut targets,
                 &mut poses,
@@ -127,8 +123,7 @@ pub(crate) fn keyboard(
         if let (Ok(ball), Ok(player)) = (balls.single(), players.single()) {
             do_hit(
                 &mut commands,
-                sfx,
-                &vols,
+                &mut audio,
                 &mut tennis,
                 &mut targets,
                 &mut poses,
@@ -175,28 +170,20 @@ pub(crate) fn settings_keys(
     sfx: Option<Res<Sfx>>,
 ) {
     let sfx = sfx.as_deref();
+    let mut audio = AudioCtx::new(sfx, *vols, *mode, &mut pending);
     if keys.just_pressed(KeyCode::KeyT) {
         // Stadium test + stereo channel check: hard-left blip now,
         // hard-right blip half a second later. If "stânga" comes out of
         // your right ear, your headset/speakers are swapped.
-        Sfx::synth(sfx, Synth::Guide, -1.0, vols.ball);
+        audio.synth(Synth::Guide, -1.0, Bus::Ball);
         let now = time.elapsed_secs();
-        pending.0.push(audio::Scheduled {
-            at: now + 0.5,
-            kind: Synth::Guide,
-            pan: 1.0,
-            vol: vols.ball,
+        audio.schedule(now + 0.5, Synth::Guide, 1.0, Bus::Ball);
+        audio.synth(Synth::Bounce, 0.65, Bus::Ball);
+        audio.umpire(&babilon_core::UmpireCall {
+            text_en: "Fifteen love".into(),
+            clip_key: Some("fifteen-love".into()),
         });
-        Sfx::synth(sfx, Synth::Bounce, 0.65, vols.ball);
-        Sfx::umpire(
-            sfx,
-            &babilon_core::UmpireCall {
-                text_en: "Fifteen love".into(),
-                clip_key: Some("fifteen-love".into()),
-            },
-            vols.umpire,
-        );
-        Sfx::clip(sfx, "applause", 0.0, vols.crowd);
+        audio.clip("applause", 0.0, Bus::Crowd);
         tennis.announce("Test audio: stânga … apoi dreapta, ricoșeu, arbitru și aplauze.".into());
         return;
     }

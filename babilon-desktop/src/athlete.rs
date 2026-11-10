@@ -7,8 +7,8 @@ use bevy::render::mesh::Mesh2d;
 use bevy::render::view::visibility::{InheritedVisibility, Visibility};
 use bevy::sprite::MeshMaterial2d;
 
-use crate::ball::{Ball, Flight, NET_Y};
-use crate::gameplay::{Targets, Tennis};
+use crate::ball::NET_Y;
+use crate::gameplay::{GameWorld, Targets};
 
 #[derive(Component)]
 pub(crate) struct PlayerPaddle;
@@ -178,16 +178,18 @@ pub(crate) fn spawn_athlete(
 /// Runs even with no flight active, so ←/→ moves the paddle + aim
 /// marker visibly in Ready phase too.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn drift_paddles(
-    time: Res<Time>,
-    tennis: Res<Tennis>,
-    targets: Res<Targets>,
-    flight: Res<Flight>,
-    balls: Query<Entity, With<Ball>>,
-    players: Query<Entity, With<PlayerPaddle>>,
-    opps: Query<Entity, With<OpponentPaddle>>,
-    mut transforms: Query<&mut Transform>,
-) {
+pub(crate) fn drift_paddles(world: GameWorld) {
+    let GameWorld {
+        time,
+        tennis,
+        targets,
+        flight,
+        balls,
+        players,
+        opps,
+        mut transforms,
+        ..
+    } = world;
     if tennis.paused {
         return;
     }

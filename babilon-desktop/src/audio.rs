@@ -678,6 +678,105 @@ pub struct Scheduled {
 #[derive(Resource, Default)]
 pub struct Pending(pub Vec<Scheduled>);
 
+/// Which volume group a cue belongs to (`C` cycles these in the UI).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bus {
+    Ball,
+    Umpire,
+    Crowd,
+}
+
+/// Everything a gameplay rule needs to make a sound, in one argument.
+///
+/// Built at the top of a system from the `Sfx` handle, the volume group
+/// mixer, the audio mode and the delayed-cue queue. Keeping this out of
+/// every function signature is what removes the old `sfx / vols / mode /
+/// pending` quartet from the serve, rally and landing code.
+pub struct AudioCtx<'a> {
+    sfx: Option<&'a Sfx>,
+    vols: Volumes,
+    pub mode: AudioMode,
+    pending: &'a mut Pending,
+}
+
+impl<'a> AudioCtx<'a> {
+    pub fn new(
+        sfx: Option<&'a Sfx>,
+        vols: Volumes,
+        mode: AudioMode,
+        pending: &'a mut Pending,
+    ) -> Self {
+        Self {
+            sfx,
+            vols,
+            mode,
+            pending,
+        }
+    }
+
+    pub fn vol(&self, bus: Bus) -> f32 {
+        match bus {
+            Bus::Ball => self.vols.ball,
+            Bus::Umpire => self.vols.umpire,
+            Bus::Crowd => self.vols.crowd,
+        }
+    }
+
+    pub fn is_access(&self) -> bool {
+        self.mode == AudioMode::Access
+    }
+
+    /// Positioned synth SFX at the group's current volume.
+    pub fn synth(&self, kind: Synth, pan: f32, bus: Bus) {
+        Sfx::synth(self.sfx, kind, pan, self.vol(bus));
+    }
+
+    /// Positioned synth SFX at an explicit amplitude (used by the
+    /// mode-dependent HIT cue).
+    pub fn synth_vol(&self, kind: Synth, pan: f32, vol: f32) {
+        Sfx::synth(self.sfx, kind, pan, vol);
+    }
+
+    /// Positioned MP3 clip at the group's current volume.
+    pub fn clip(&self, key: &str, pan: f32, bus: Bus) {
+        Sfx::clip(self.sfx, key, pan, self.vol(bus));
+    }
+
+    /// Umpire voice, always centered: MP3 when we have one, console TTS
+    /// fallback for tie-break scores (same as the web version).
+    pub fn umpire(&self, call: &babilon_core::UmpireCall) {
+        if call.clip_key.is_some() {
+            Sfx::umpire(self.sfx, call, self.vols.umpire);
+        } else {
+            println!("[ARBITRU TTS] {}", call.text_en);
+        }
+    }
+
+    /// Queue a cue to play `secs` from now (the web's `setTimeout` cues).
+    pub fn schedule(&mut self, at: f32, kind: Synth, pan: f32, bus: Bus) {
+        self.pending.0.push(Scheduled {
+            at,
+            kind,
+            pan,
+            vol: self.vol(bus),
+        });
+    }
+
+    /// Mid-flight guide beep — Access mode only; Realist keeps just the
+    /// bounces and the landing cue.
+    pub fn guide(&mut self, at: f32, pan: f32) {
+        if self.is_access() {
+            self.schedule(at, Synth::Guide, pan, Bus::Ball);
+        }
+    }
+
+    /// Landing HIT cue: full volume in Access mode, a discreet hint in
+    /// Realist mode.
+    pub fn cue_amp(&self) -> f32 {
+        self.vol(Bus::Ball) * if self.is_access() { 1.0 } else { 0.4 }
+    }
+}
+
 /// Fires due scheduled beeps. Runs in the `Update` chain after `hit_timeout`.
 pub fn play_pending(time: Res<Time>, sfx: Option<Res<Sfx>>, mut pending: ResMut<Pending>) {
     let now = time.elapsed_secs();
@@ -742,7 +841,7 @@ mod tests {
         let (l, r) = pan_gains(1.0);
         assert!(l.abs() < 1e-6 && (r - 1.0).abs() < 1e-6);
         let (l, r) = pan_gains(0.0);
-        assert!((l - r).abs() < 1e-6 && (l - 0.7071).abs() < 1e-3);
+        assert!((l - r).abs() < 1e-6 && (l - std::f32::consts::FRAC_1_SQRT_2).abs() < 1e-3);
         // constant power: total energy is flat across the field
         for p in [-1.0, -0.5, 0.0, 0.5, 1.0] {
             let (l, r) = pan_gains(p);
@@ -781,7 +880,7 @@ mod tests {
         // Hard left: sound ONLY on even (left) slots; hard right: mirrored.
         // Proves the previous "reversed stereo" report can't come from here.
         let left: Vec<f32> = Pan::new(tone(440.0, 440.0, 0.02, 1.0), -1.0).collect();
-        assert!(!left.is_empty() && left.len() % 2 == 0);
+        assert!(!left.is_empty() && left.len().is_multiple_of(2));
         for (i, s) in left.iter().enumerate() {
             if i % 2 == 1 {
                 assert!(s.abs() < 1e-6, "right leaks on hard-left pan: {s}");

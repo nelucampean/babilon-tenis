@@ -18,18 +18,6 @@ mod scoreboard;
 mod settings;
 mod theme;
 
-// Flat re-exports keep the in-file test harness (and any future internal
-// module) able to use `use super::*` like the old single-file layout.
-pub(crate) use a11y::*;
-pub(crate) use athlete::*;
-pub(crate) use audio::*;
-pub(crate) use ball::*;
-pub(crate) use gameplay::*;
-pub(crate) use hud::*;
-pub(crate) use input::*;
-pub(crate) use particles::*;
-pub(crate) use scoreboard::*;
-
 fn main() {
     app::run();
 }
@@ -39,7 +27,16 @@ mod smoke {
     //! Headless boot of the real system schedule. Catches query conflicts
     //! (B0001 — only raised at first schedule run, not by `cargo check`)
     //! and plays a full point without a display or audio device.
-    use super::*;
+    use crate::a11y::*;
+    use crate::athlete::*;
+    use crate::audio;
+    use crate::audio::*;
+    use crate::ball::*;
+    use crate::gameplay::*;
+    use crate::hud::*;
+    use crate::input::*;
+    use crate::particles::*;
+    use crate::scoreboard::*;
     use accesskit::Role;
     use babilon_core::*;
     use bevy::a11y::{AccessibilityNode, ActionRequest as A11yActionRequest};
