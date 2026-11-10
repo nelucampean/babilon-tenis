@@ -37,12 +37,51 @@ impl Shot {
             _ => Shot::Flat,
         }
     }
-    /// `typeBonus` in `hit()`: liftată +0.04, slice +0.025.
+
+    /// Winner-chance bonus. Topspin is the most attacking, slice the least.
     pub fn type_bonus(self) -> f32 {
         match self {
-            Shot::Topspin => 0.04,
-            Shot::Slice => 0.025,
-            Shot::Flat => 0.0,
+            Shot::Flat => 0.020,
+            Shot::Topspin => 0.045,
+            Shot::Slice => 0.005,
+        }
+    }
+
+    /// Extra out risk from the shot shape: flat is the riskiest, slice the
+    /// safest (more clearance / skid).
+    pub fn out_delta(self) -> f32 {
+        match self {
+            Shot::Flat => 0.030,
+            Shot::Topspin => 0.0,
+            Shot::Slice => -0.015,
+        }
+    }
+
+    /// Multiplier on the opponent's counter chance: a loopier topspin is
+    /// easier to attack, a low slice is harder to attack.
+    pub fn counter_factor(self) -> f32 {
+        match self {
+            Shot::Flat => 1.0,
+            Shot::Topspin => 1.15,
+            Shot::Slice => 0.80,
+        }
+    }
+
+    /// Peak arc height in pixels (presentation: the desktop draws it).
+    pub fn arc_height(self) -> f32 {
+        match self {
+            Shot::Flat => 18.0,
+            Shot::Topspin => 48.0,
+            Shot::Slice => 24.0,
+        }
+    }
+
+    /// Flight-time multiplier: flat hurries the opponent, slice floats.
+    pub fn flight_time(self) -> f32 {
+        match self {
+            Shot::Flat => 0.90,
+            Shot::Topspin => 0.98,
+            Shot::Slice => 1.10,
         }
     }
 }
@@ -502,9 +541,10 @@ impl Match {
     /// Whiff line: farther than this from the ball and the swing hits air.
     pub const WHIFF_DISTANCE: f32 = 120.0;
 
-    /// Chance the return goes OUT. Mirrors `outChance` in `hit()`.
+    /// Chance the return goes OUT. Mirrors `outChance` in `hit()`, plus the
+    /// shot-specific risk: flat is aggressive, slice is safer.
     pub fn out_chance(quality: f32, shot: Shot) -> f32 {
-        0.035 + (1.0 - quality) * 0.26 + if shot == Shot::Flat { 0.025 } else { 0.0 }
+        0.035 + (1.0 - quality) * 0.26 + shot.out_delta()
     }
 
     /// Chance the return is an outright winner. Mirrors `winnerChance`.
@@ -578,7 +618,9 @@ impl RallyOutcome {
         if roll_win < Match::winner_chance(quality, difficulty, alignment, shot) {
             return RallyOutcome::Winner;
         }
-        if roll_counter < Match::opponent_counter_chance(quality, difficulty) {
+        if roll_counter
+            < Match::opponent_counter_chance(quality, difficulty) * shot.counter_factor()
+        {
             return RallyOutcome::Countered;
         }
         RallyOutcome::Continue
@@ -739,6 +781,25 @@ mod tests {
         assert_eq!(Match::hit_quality(500.0), 0.87);
         assert_eq!(Match::hit_quality(900.0), 0.66);
         assert_eq!(Match::hit_quality(1300.0), 0.44);
+    }
+
+    #[test]
+    fn shot_types_trade_risk_for_reward() {
+        let q = 0.7;
+        let out = |s| Match::out_chance(q, s);
+        assert!(out(Shot::Flat) > out(Shot::Topspin));
+        assert!(out(Shot::Topspin) > out(Shot::Slice));
+        let win = |s| Match::winner_chance(q, Difficulty::Normal, 0, s);
+        assert!(win(Shot::Topspin) > win(Shot::Flat));
+        assert!(win(Shot::Flat) > win(Shot::Slice));
+        // Aggressive shots are easier to counter; slice is the defensive one.
+        assert!(Shot::Topspin.counter_factor() > Shot::Flat.counter_factor());
+        assert!(Shot::Flat.counter_factor() > Shot::Slice.counter_factor());
+        // Presentation: flat is low and quick, topspin high, slice slow.
+        assert!(Shot::Topspin.arc_height() > Shot::Slice.arc_height());
+        assert!(Shot::Slice.arc_height() > Shot::Flat.arc_height());
+        assert!(Shot::Flat.flight_time() < Shot::Topspin.flight_time());
+        assert!(Shot::Topspin.flight_time() < Shot::Slice.flight_time());
     }
 
     #[test]

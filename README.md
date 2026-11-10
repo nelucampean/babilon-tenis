@@ -81,6 +81,22 @@ Needs a display + audio (desktop). First keypress unlocks audio, same as web.
 - `O` tells you where the opponent is at any moment (lower octave blip,
   never confused with your own lane blip).
 
+## Shot types (`1` / `2` / `3`)
+
+The three shots are not cosmetic labels — they change the flight, the
+contact sound and the risk/reward maths. The choice is snapshotted at
+contact, so pressing `1/2/3` mid-flight only affects your next hit.
+
+| Key | Shot | Arc / speed | Out risk | Winner bonus | Counter risk | Sound |
+| --- | --- | --- | --- | --- | --- | --- |
+| `1` | Flat (`plată`) | low, fastest | +3.0 pp | +2.0 pp | normal | sharp high crack |
+| `2` | Topspin (`liftată`) | high, fast | 0 | +4.5 pp | +15% | lower rising thump |
+| `3` | Slice (`slice`) | low skid, slowest | −1.5 pp | +0.5 pp | −20% | bright descending swish |
+
+So flat is the aggressive drive (quick, but riskier), topspin the heavy
+attacking ball (best winner chance, but easier to counter), and slice the
+defensive reset (safest, hardest to attack, but rarely a winner).
+
 ## UI layout
 
 - 1160×800 window: the court stays centered-left, and all text lives in a

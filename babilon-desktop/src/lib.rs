@@ -512,7 +512,27 @@ mod smoke {
             let f = app.world().resource::<Flight>();
             assert_eq!(f.hit_dir, 2);
             assert_eq!(f.hit_shot, Shot::Topspin);
+            assert_eq!(f.arc_height, Shot::Topspin.arc_height());
+            assert!(
+                (f.duration - 0.92 * Shot::Topspin.flight_time()).abs() < 1e-6,
+                "topspin flight time wrong: {}",
+                f.duration
+            );
         }
+        assert!(
+            app.world()
+                .resource::<CapturedSounds>()
+                .0
+                .iter()
+                .any(|s| matches!(
+                    s,
+                    Sound::Synth {
+                        kind: Synth::Shot(Shot::Topspin),
+                        ..
+                    }
+                )),
+            "topspin stroke sound not emitted"
+        );
         // Mash keys mid-flight: live aim changes, snapshot must not.
         press(&mut app, KeyCode::ArrowLeft);
         press(&mut app, KeyCode::ArrowLeft);
@@ -524,6 +544,7 @@ mod smoke {
             let f = app.world().resource::<Flight>();
             assert_eq!(f.hit_dir, 2, "snapshot must survive mid-flight keys");
             assert_eq!(f.hit_shot, Shot::Topspin);
+            assert_eq!(f.arc_height, Shot::Topspin.arc_height());
         }
         // Landing resolves without panic; point or continued rally.
         app.world_mut().resource_mut::<Flight>().t = 100.0;

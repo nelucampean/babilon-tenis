@@ -209,6 +209,23 @@ fn bounce_src() -> impl Source<Item = f32> + Send + 'static {
     burst(750.0, 250.0, 0.11, 0.24)
 }
 
+/// Player stroke recipes: each shot has a recognisable timbre, not just a
+/// different label. Flat is a sharp high crack, topspin a lower rising
+/// thump, slice a bright descending swish.
+fn stroke_src(shot: babilon_core::Shot) -> Box<dyn Source<Item = f32> + Send> {
+    match shot {
+        babilon_core::Shot::Flat => {
+            Box::new(burst(1900.0, 620.0, 0.075, 0.34).mix(tone(210.0, 145.0, 0.08, 0.17)))
+        }
+        babilon_core::Shot::Topspin => {
+            Box::new(burst(1050.0, 360.0, 0.11, 0.25).mix(tone(140.0, 360.0, 0.16, 0.17)))
+        }
+        babilon_core::Shot::Slice => {
+            Box::new(burst(2600.0, 850.0, 0.14, 0.20).mix(tone(820.0, 260.0, 0.16, 0.11)))
+        }
+    }
+}
+
 /// Which synth to play.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Synth {
@@ -218,6 +235,8 @@ pub enum Synth {
     Bounce,
     Good,
     Bad,
+    /// Player stroke, shaped by the selected shot type.
+    Shot(babilon_core::Shot),
     /// Position blip when YOU move: pitch + pan both encode the lane, so it
     /// reads even on one working ear / one speaker.
     Lane(i8),
@@ -491,6 +510,7 @@ fn play_synth(handle: &OutputStreamHandle, kind: Synth, pan: f32, vol: f32) {
         Synth::Guide => Box::new(Pan::new(with_vol(tone(475.0, 580.0, 0.16, 0.16), vol), pan)),
         Synth::Cue => Box::new(Pan::new(with_vol(tone(900.0, 740.0, 0.21, 0.26), vol), pan)),
         Synth::Hit => Box::new(Pan::new(with_vol(hit_src(), vol), pan)),
+        Synth::Shot(shot) => Box::new(Pan::new(with_vol(stroke_src(shot), vol), pan)),
         Synth::Bounce => Box::new(Pan::new(with_vol(bounce_src(), vol), pan)),
         Synth::Good => Box::new(Pan::new(with_vol(tone(760.0, 900.0, 0.23, 0.17), vol), pan)),
         Synth::Bad => Box::new(Pan::new(with_vol(tone(230.0, 150.0, 0.22, 0.15), vol), pan)),
@@ -962,6 +982,29 @@ mod tests {
         assert_eq!(v[0], 0);
         assert_eq!(v[v.len() - 1], 0);
         assert!(v[v.len() / 2].abs() > 20000, "fade must not touch the body");
+    }
+
+    #[test]
+    fn stroke_sounds_differ_per_shot() {
+        use babilon_core::Shot;
+        let rendered =
+            |shot| -> Vec<f32> { Pan::new(with_vol(stroke_src(shot), 1.0), 0.0).collect() };
+        let flat = rendered(Shot::Flat);
+        let topspin = rendered(Shot::Topspin);
+        let slice = rendered(Shot::Slice);
+        for (name, samples) in [("flat", &flat), ("topspin", &topspin), ("slice", &slice)] {
+            assert!(!samples.is_empty(), "{name} silent");
+            assert!(
+                samples.iter().any(|s| s.abs() > 0.05),
+                "{name} body too quiet"
+            );
+            let first = samples[0];
+            let last = samples[samples.len() - 1];
+            assert!(first.abs() < 1e-6, "{name} click at start: {first}");
+            assert!(last.abs() < 0.05, "{name} click at end: {last}");
+        }
+        // The flat crack is deliberately shorter than the loopier shots.
+        assert!(flat.len() < topspin.len());
     }
 
     #[test]

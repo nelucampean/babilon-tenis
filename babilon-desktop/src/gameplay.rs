@@ -1,6 +1,6 @@
 //! Game flow: serve / incoming / hit / rally resolution and the match
 //! resources that drive it. Mirrors serve()/incoming()/hit()/point() in JS.
-use babilon_core::{Difficulty, Dir, Match, Phase, RallyOutcome, LANE_STEP, MAX_DIR};
+use babilon_core::{Difficulty, Dir, Match, Phase, RallyOutcome, Shot, LANE_STEP, MAX_DIR};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use rand::Rng;
@@ -60,6 +60,7 @@ pub(crate) fn start_flight(
     flight.to = to;
     flight.bounce_at = bounce_at;
     flight.bounced = false;
+    flight.arc_height = 33.0;
     flight.after = after;
 }
 
@@ -620,6 +621,7 @@ pub(crate) fn do_hit(
     tennis.hit_window = None;
     tennis.m.phase = Phase::Return;
     poses.p_swing_until = now + 0.45;
+    let shot = tennis.m.shot;
     // JS: player runs to the ball, opponent anticipates our target.
     targets.player_x = tennis.m.incoming_side as f32 * LANE_STEP;
     targets.opp_x = tennis.m.dir as f32 * LANE_STEP;
@@ -627,31 +629,37 @@ pub(crate) fn do_hit(
         &mut *commands,
         format!(
             "Lovitură {} spre {}.",
-            text::shot_label_ro(tennis.m.shot),
+            text::shot_label_ro(shot),
             text::dir_label_ro(tennis.m.dir)
         ),
     );
     commands.synth(
-        Synth::Hit,
+        Synth::Shot(shot),
         tennis.m.incoming_side as f32 / MAX_DIR as f32,
         Bus::Ball,
     );
     if let Ok(t) = transforms.get(ball) {
         let at = t.translation.truncate();
-        spawn_sparks(commands, pa, particles, at, false, 3);
+        let sparks = match shot {
+            Shot::Topspin => 5,
+            Shot::Slice => 2,
+            Shot::Flat => 3,
+        };
+        spawn_sparks(commands, pa, particles, at, false, sparks);
         start_flight(
             flight,
             Vec2::new(t.translation.x, t.translation.y),
             Vec2::new(tennis.m.dir as f32 * LANE_STEP, 300.0),
-            0.92,
+            0.92 * shot.flight_time(),
             FlightAfter::ReturnLanded,
             Some(0.61),
         );
+        flight.arc_height = shot.arc_height();
     }
     // stash the contact snapshot in the flight for the rally resolution
     flight.hit_quality = quality;
     flight.hit_dir = tennis.m.dir;
-    flight.hit_shot = tennis.m.shot;
+    flight.hit_shot = shot;
 }
 
 pub(crate) fn hit_timeout(world: GameWorld) {

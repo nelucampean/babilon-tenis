@@ -27,6 +27,8 @@ pub(crate) struct Flight {
     pub(crate) bounce_at: Option<f32>,
     pub(crate) bounced: bool,
     pub(crate) after: FlightAfter,
+    /// Peak visual arc height in pixels for this flight (shot-dependent).
+    pub(crate) arc_height: f32,
     /// Contact quality of the swing that started this flight (0.44..1.0).
     pub(crate) hit_quality: f32,
     /// Aim + shot snapshotted at contact. The rally MUST resolve with what
@@ -47,6 +49,7 @@ impl Default for Flight {
             bounce_at: None,
             bounced: false,
             after: FlightAfter::None,
+            arc_height: 33.0,
             hit_quality: 0.0,
             hit_dir: 0,
             hit_shot: Shot::Flat,
@@ -103,7 +106,7 @@ pub(crate) fn ball_flight(world: GameWorld) {
     let e = t * t * (3.0 - 2.0 * t);
     let pos = flight.from.lerp(flight.to, e);
     // arc height -> ball scale pulse (cheap 2D height cue)
-    let height = (t * std::f32::consts::PI).sin() * 33.0;
+    let height = (t * std::f32::consts::PI).sin() * flight.arc_height;
 
     // Ball arcs with real lift: the mesh rises by `height` while the
     // shadow stays on the court (mirrors ballDraw() in index.html).
