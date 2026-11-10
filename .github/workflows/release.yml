@@ -1,0 +1,46 @@
+name: release
+
+# Tag-driven: `git tag v0.5.0` + `git push origin v0.5.0` builds the Windows
+# package and publishes it on the tag's GitHub Release. The tag must match
+# babilon-desktop's Cargo version (checked below).
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-windows
+      - name: Check tag matches Cargo version
+        run: |
+          $ver = (Select-String -Path babilon-desktop/Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          if ("v$ver" -ne "${{ github.ref_name }}") { throw "tag ${{ github.ref_name }} does not match babilon-desktop $ver" }
+      - name: Build (Windows exe)
+        env:
+          # Static CRT: the exe runs on stock Windows 10/11, no VS redist needed.
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: cargo build --release -p babilon-desktop
+      - name: Stage + zip package (exe + assets)
+        # NOTE: this runs in PowerShell — no Unix redirections, no `||` chains.
+        run: |
+          New-Item -ItemType Directory -Force package | Out-Null
+          Copy-Item target/release/babilon-desktop.exe package/BabilonTennis.exe
+          Copy-Item babilon-desktop/assets package/assets -Recurse -Force
+          if (Test-Path README.md) { Copy-Item README.md package/ }
+          $zip = "BabilonTennis-${{ github.ref_name }}-windows-x86_64.zip"
+          Compress-Archive -Path package/* -DestinationPath $zip -Force
+          Add-Content -Path $env:GITHUB_ENV -Value "ZIP=$zip"
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.ZIP }}
+          generate_release_notes: true

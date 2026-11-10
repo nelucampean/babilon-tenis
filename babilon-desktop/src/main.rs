@@ -5,7 +5,10 @@
 //! Screen readers get the status text via Bevy UI (AccessKit) + stdout line.
 //! Stereo MP3s live in `assets/sunete/` (copied from the web version).
 
-use babilon_core::{Difficulty, Match, Phase, RallyOutcome, Shot, LANE_STEP, MAX_DIR};
+use babilon_core::{Difficulty, Dir, Match, Phase, RallyOutcome, Shot, LANE_STEP, MAX_DIR};
+use accesskit::{Action, Live, Role};
+use bevy::a11y::{AccessibilityNode, ActionRequest as A11yActionRequest};
+use bevy::input_focus::{InputDispatchPlugin, InputFocus};
 use bevy::ecs::hierarchy::ChildOf;
 use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::log::LogPlugin;
@@ -40,7 +43,7 @@ impl Tennis {
 }
 
 /// One ball flight, animated in `ball_flight`. Mirrors `trajectory()` in JS.
-#[derive(Resource, Default)]
+#[derive(Resource)]
 struct Flight {
     active: bool,
     t: f32,
@@ -52,15 +55,44 @@ struct Flight {
     after: FlightAfter,
     /// Contact quality of the swing that started this flight (0.44..1.0).
     hit_quality: f32,
+    /// Aim + shot snapshotted at contact. The rally MUST resolve with what
+    /// the racket did at hit time — not with whatever ←/→/1-2-3 the player
+    /// mashes during the 0.92s return flight.
+    hit_dir: Dir,
+    hit_shot: Shot,
 }
 
-#[derive(Default, Clone, Copy, PartialEq, Eq)]
+impl Default for Flight {
+    fn default() -> Self {
+        Self {
+            active: false,
+            t: 0.0,
+            duration: 0.0,
+            from: Vec2::ZERO,
+            to: Vec2::ZERO,
+            bounce_at: None,
+            bounced: false,
+            after: FlightAfter::None,
+            hit_quality: 0.0,
+            hit_dir: 0,
+            hit_shot: Shot::Flat,
+        }
+    }
+}
+
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
 enum FlightAfter {
     #[default]
     None,
     ServeLanded,
     IncomingLanded,
     ReturnLanded,
+    /// Visual epilogue: your ball sails long/wide after the OUT call.
+    /// The point was already scored at takeoff; landing just parks the ball.
+    OutLanded,
+    /// Visual epilogue: his counter comes back at your feet and beats you.
+    /// The point was already scored at takeoff; landing just parks the ball.
+    CounterLanded,
 }
 
 // ---- entities --------------------------------------------------------------
@@ -147,6 +179,64 @@ struct ParticleAssets {
 struct UiFonts {
     regular: Handle<Font>,
     bold: Handle<Font>,
+}
+
+/// Read-only edit box for one side-panel line.
+///
+/// Bevy 0.16 only auto-creates AccessKit nodes for `Button` / `Image` /
+/// `Label` entities — a bare `Text` is invisible to JAWS/NVDA. A `Label`
+/// node (`Role::Label`) is static text: screen readers can browse it with
+/// the virtual cursor but it never takes focus, so Tab/focus navigation
+/// skips it and the tree has no focusable leaves. A read-only
+/// `MultilineTextInput` is focusable *and* readable (`value` = visible
+/// text), so JAWS/NVDA can both browse and move focus onto each line —
+/// a working accessible focus tree.
+///
+/// No `Label` component is attached on purpose: `bevy_ui::label_changed`
+/// resets any explicit node on a `Label` entity back to `Role::Label` in
+/// `PostUpdate`. A bare explicit `AccessibilityNode` still joins the tree
+/// via its `ChildOf` chain, and keeps whatever role we give it.
+/// The node value is kept in sync with the `Text` in `refresh_ui`.
+fn readonly_box(label: &str, value: &str) -> AccessibilityNode {
+    let mut node = accesskit::Node::new(Role::MultilineTextInput);
+    node.set_label(label.to_string().into_boxed_str());
+    node.set_value(value.to_string().into_boxed_str());
+    node.set_read_only();
+    node.add_action(Action::Focus);
+    AccessibilityNode::from(node)
+}
+
+/// Live announcement box for the status line ("Acum lovește!", scores…).
+///
+/// Same read-only edit box as above, plus `Live::Polite` + atomic so
+/// NVDA/JAWS speak every update without moving focus, like an ARIA live
+/// region. Focusable too: `I` moves Bevy's `InputFocus` (mirrored to
+/// AccessKit focus) here from the keyboard side, and a screen reader can
+/// move focus onto it from its side.
+fn live_box(label: &str, value: &str) -> AccessibilityNode {
+    let mut node = accesskit::Node::new(Role::MultilineTextInput);
+    node.set_label(label.to_string().into_boxed_str());
+    node.set_value(value.to_string().into_boxed_str());
+    node.set_read_only();
+    node.set_live(Live::Polite);
+    node.set_live_atomic();
+    node.add_action(Action::Focus);
+    AccessibilityNode::from(node)
+}
+
+/// Handles of the side info block, so a key press can move screen-reader
+/// focus through it (`I` cycles, `Esc` back to the game).
+///
+/// `order` is the full Tab/focus order (visual order); `status` is the
+/// live announcements box where the cycle starts.
+#[derive(Resource)]
+struct InfoPanel {
+    status: Entity,
+    order: Vec<Entity>,
+}
+
+fn set_node_value(node: &mut AccessibilityNode, text: &str) {
+    node.set_value(text.to_string().into_boxed_str());
 }
 
 fn spawn_sparks(
@@ -283,14 +373,16 @@ fn spawn_athlete(
         ));
         racket = mount.id();
         mount.with_children(|q| {
-            rect_part(q, meshes, mats, 7., 30., navy, 0., 20., 0.1); // handle
-            circ_part(q, meshes, mats, 17., frame, 0., -8., 0.2); // frame
-            circ_part(q, meshes, mats, 13., strings, 0., -8., 0.3); // strings bed
-            rect_part(q, meshes, mats, 1.5, 22., white, -6., -8., 0.4);
-            rect_part(q, meshes, mats, 1.5, 22., white, 0., -8., 0.4);
-            rect_part(q, meshes, mats, 1.5, 22., white, 6., -8., 0.4);
-            rect_part(q, meshes, mats, 22., 1.5, white, 0., -14., 0.4);
-            rect_part(q, meshes, mats, 22., 1.5, white, 0., -2., 0.4);
+            // Racket held in the hand (mount origin): handle grips down
+            // through the hand, head points UP (frame above the hand).
+            rect_part(q, meshes, mats, 7., 30., navy, 0., 0., 0.1); // handle
+            circ_part(q, meshes, mats, 17., frame, 0., 30., 0.2); // frame
+            circ_part(q, meshes, mats, 13., strings, 0., 30., 0.3); // strings bed
+            rect_part(q, meshes, mats, 1.5, 22., white, -6., 30., 0.4);
+            rect_part(q, meshes, mats, 1.5, 22., white, 0., 30., 0.4);
+            rect_part(q, meshes, mats, 1.5, 22., white, 6., 30., 0.4);
+            rect_part(q, meshes, mats, 22., 1.5, white, 0., 24., 0.4);
+            rect_part(q, meshes, mats, 22., 1.5, white, 0., 36., 0.4);
         });
     });
     // orient arm + racket mounts
@@ -346,6 +438,10 @@ fn main() {
     .insert_resource(vols)
     .insert_resource(saved.mode)
     .insert_resource(Pending::default())
+    // Input focus tracking: required for ANY AccessKit tree updates
+    // (bevy_winit skips them entirely without `InputFocus`), and lets
+    // `I` / `Esc` move screen-reader focus between game and info panel.
+    .add_plugins(InputDispatchPlugin)
     .add_systems(Startup, setup)
     // chained: keyboard Space and the 1.4s miss-timer race otherwise,
     // and flight landings must run before the timeout check.
@@ -354,6 +450,8 @@ fn main() {
         (
             keyboard,
             settings_keys,
+            info_focus_keys,
+            a11y_focus_requests,
             drift_paddles,
             ball_flight,
             particle_fx,
@@ -553,14 +651,27 @@ fn setup(
     });
 
     // Accessible HUD: side panel with Inter (full Romanian diacritics),
-    // docked right of the court so no text covers the game. Real Bevy UI
-    // text nodes -> exposed via AccessKit to NVDA / Narrator / VoiceOver.
+    // docked right of the court so no text covers the game. Every line is a
+    // read-only multiline edit box (see `readonly_box`): focusable, so the
+    // AccessKit tree has a working Tab/focus order, not just browsable
+    // static labels. The status box is additionally a polite live region so
+    // announcements speak automatically. The panel itself is a Region so the
+    // block navigates as one group.
     let gold = Color::srgb(0.98, 0.79, 0.40);
     let ink = Color::srgb(0.93, 0.97, 0.97);
     let muted = Color::srgb(0.72, 0.82, 0.85);
     let panel = Color::srgba(0.03, 0.10, 0.16, 0.96);
     let reg = fonts.regular.clone();
     let bold = fonts.bold.clone();
+    let title_txt = "BABILON TENNIS";
+    let score_txt = "Seturi 0 – 0\nGame-uri 0 – 0\nTu 0, calculator 0";
+    let status_txt = "Meci nou. Apasă S pentru serviciu.";
+    let shot_txt = "Direcție: centru • Lovitură: plată";
+    let phase_txt = "PREGĂTIT PENTRU SERVICIU";
+    let mode_txt = "Accesibil • Normal • Volum 100/100/65 • Stereo normal";
+    let help_txt = "S serviciu • Spațiu lovire\n←/→ direcție • 1/2/3 lovitură\nR repetă • P pauză • T test audio\nG dificultate • M mod audio • N stereo\nC grup volum • Z/X volum\nI focusează anunțurile (repetat = câmpul următor) • Esc înapoi la joc";
+    let mut order: Vec<Entity> = Vec::with_capacity(7);
+    let mut info_status = Entity::PLACEHOLDER;
     commands
         .spawn(Node {
             width: Val::Percent(100.),
@@ -569,6 +680,11 @@ fn setup(
             ..default()
         })
         .with_children(|root| {
+            let mut panel_node = accesskit::Node::new(Role::Region);
+            panel_node.set_label("Panou informații joc");
+            // Focusable, so JAWS/NVDA can land on the whole block and then
+            // browse its lines with the virtual cursor.
+            panel_node.add_action(Action::Focus);
             root.spawn((
                 Node {
                     width: Val::Px(268.),
@@ -579,50 +695,80 @@ fn setup(
                     ..default()
                 },
                 BackgroundColor(panel),
+                AccessibilityNode::from(panel_node),
             ))
             .with_children(|p| {
-                p.spawn((
-                    Text::new("BABILON TENNIS"),
-                    TextFont { font: bold.clone(), font_size: 15.0, ..default() },
-                    TextColor(gold),
-                ));
-                p.spawn((
-                    ScoreText,
-                    Text::new("Seturi 0 – 0\nGame-uri 0 – 0\nTu 0, calculator 0"),
-                    TextFont { font: bold.clone(), font_size: 19.0, ..default() },
-                    TextColor(ink),
-                ));
-                p.spawn((
+                order.push(
+                    p.spawn((
+                        Text::new(title_txt),
+                        TextFont { font: bold.clone(), font_size: 15.0, ..default() },
+                        TextColor(gold),
+                        readonly_box("Titlu joc", title_txt),
+                    ))
+                    .id(),
+                );
+                order.push(
+                    p.spawn((
+                        ScoreText,
+                        Text::new(score_txt),
+                        TextFont { font: bold.clone(), font_size: 19.0, ..default() },
+                        TextColor(ink),
+                        readonly_box("Scor", score_txt),
+                    ))
+                    .id(),
+                );
+                info_status = p.spawn((
                     StatusText,
-                    Text::new("Meci nou. Apasă S pentru serviciu."),
+                    Text::new(status_txt),
                     TextFont { font: reg.clone(), font_size: 19.0, ..default() },
                     TextColor(ink),
-                ));
-                p.spawn((
-                    ShotText,
-                    Text::new("Direcție: centru • Lovitură: plată"),
-                    TextFont { font: reg.clone(), font_size: 14.0, ..default() },
-                    TextColor(ink),
-                ));
-                p.spawn((
-                    PhaseText,
-                    Text::new("PREGĂTIT PENTRU SERVICIU"),
-                    TextFont { font: bold.clone(), font_size: 13.0, ..default() },
-                    TextColor(gold),
-                ));
-                p.spawn((
-                    ModeText,
-                    Text::new("Accesibil • Normal • Volum 100/100/65 • Stereo normal"),
-                    TextFont { font: reg.clone(), font_size: 13.0, ..default() },
-                    TextColor(muted),
-                ));
-                p.spawn((
-                    Text::new("S serviciu • Spațiu lovire\n←/→ direcție • 1/2/3 lovitură\nR repetă • P pauză • T test audio\nG dificultate • M mod audio • N stereo\nC grup volum • Z/X volum"),
-                    TextFont { font: reg.clone(), font_size: 12.0, ..default() },
-                    TextColor(muted),
-                ));
+                    live_box("Anunțuri", status_txt),
+                )).id();
+                order.push(info_status);
+                order.push(
+                    p.spawn((
+                        ShotText,
+                        Text::new(shot_txt),
+                        TextFont { font: reg.clone(), font_size: 14.0, ..default() },
+                        TextColor(ink),
+                        readonly_box("Direcție și lovitură", shot_txt),
+                    ))
+                    .id(),
+                );
+                order.push(
+                    p.spawn((
+                        PhaseText,
+                        Text::new(phase_txt),
+                        TextFont { font: bold.clone(), font_size: 13.0, ..default() },
+                        TextColor(gold),
+                        readonly_box("Fază joc", phase_txt),
+                    ))
+                    .id(),
+                );
+                order.push(
+                    p.spawn((
+                        ModeText,
+                        Text::new(mode_txt),
+                        TextFont { font: reg.clone(), font_size: 13.0, ..default() },
+                        TextColor(muted),
+                        readonly_box("Mod audio și volum", mode_txt),
+                    ))
+                    .id(),
+                );
+                order.push(
+                    p.spawn((
+                        Text::new(help_txt),
+                        TextFont { font: reg.clone(), font_size: 12.0, ..default() },
+                        TextColor(muted),
+                        readonly_box("Ajutor taste", help_txt),
+                    ))
+                    .id(),
+                );
             });
         });
+    // Remember the order + live box so `I` can walk screen-reader focus
+    // through the whole block and `Esc` returns to the game.
+    commands.insert_resource(InfoPanel { status: info_status, order });
 }
 
 // ---- game flow (mirrors serve()/incoming()/hit()/point() in JS) ------------
@@ -811,47 +957,66 @@ fn land_return(
     transforms: &mut Query<&mut Transform>,
     pa: &ParticleAssets,
     particles: &mut Particles,
-    quality: f32,
 ) {
     let mut rng = rand::thread_rng();
+    // Resolve with the contact snapshot (aim/shot/quality at hit time) —
+    // never with the live keys, which the player may have moved since.
     let outcome = RallyOutcome::resolve(
         tennis.difficulty,
-        tennis.m.dir,
+        flight.hit_dir,
         tennis.m.incoming_side,
-        tennis.m.shot,
-        quality,
+        flight.hit_shot,
+        flight.hit_quality,
         rng.gen(),
         rng.gen(),
         rng.gen(),
     );
     match outcome.point_winner() {
         Some(w) => {
-            let reason = if outcome == RallyOutcome::Out {
-                "AUT! Mingea ta a ieșit afară"
-            } else if w == 0 {
-                "Punct câștigat"
-            } else {
-                "Adversarul a câștigat punctul"
-            };
-            let r = tennis.m.score_point(w, reason);
-            let msg = r.message_ro.clone();
-            tennis.announce(msg);
-            if reason.contains("AUT") {
-                Sfx::clip(sfx, "out", 0.0, vols.umpire);
-            }
-            umpire_call(sfx, vols, &r.umpire);
             if w == 0 {
+                let r = tennis.m.score_point(0, "Punct câștigat");
+                let msg = r.message_ro.clone();
+                tennis.announce(msg);
+                umpire_call(sfx, vols, &r.umpire);
                 Sfx::clip(sfx, "applause", 0.0, vols.crowd);
                 Sfx::synth(sfx, Synth::Good, 0.0, vols.ball);
                 spawn_sparks(commands, pa, particles, flight.to, true, 7);
+                flight.active = false;
+                reset_ball_to_player(transforms, ball, targets);
+            } else if outcome == RallyOutcome::Out {
+                // Takeoff gets ONLY the line call + flight noise. The score,
+                // umpire and jingles wait for the landing — otherwise the
+                // 90ms Hit drowns under the voice + Bad + crowd starting in
+                // the same frame and the ball is never heard.
+                tennis.announce("AUT! Mingea a ieșit.".into());
+                Sfx::clip(sfx, "out", 0.0, vols.umpire);
+                let from = flight.to;
+                let to = if rand::thread_rng().gen::<f32>() < 0.5 {
+                    Vec2::new(from.x, 392.0)
+                } else {
+                    let side = if from.x >= 0.0 { 1.0 } else { -1.0 };
+                    Vec2::new(side * 305.0, 262.0)
+                };
+                start_flight(flight, from, to, 0.42, FlightAfter::OutLanded, Some(0.75));
+                // Epilogue in flight: phase Return so Space/S wait for it.
+                tennis.m.phase = Phase::Return;
             } else {
-                Sfx::synth(sfx, Synth::Bad, 0.0, vols.ball);
-                if rand::thread_rng().gen::<f32>() < 0.40 {
-                    Sfx::clip(sfx, "reaction", 0.0, vols.crowd);
+                // His reply, staged like any incoming ball: warning text,
+                // his racket crack, full-volume Cue, mid-flight guide, then
+                // the bounce — the score call waits for the landing.
+                tennis.announce("Contraatac! Mingea vine spre tine!".into());
+                poses.o_swing_until = now + 0.45;
+                let pan = (flight.to.x / 160.0).clamp(-1.0, 1.0);
+                Sfx::synth(sfx, Synth::Hit, pan, vols.ball);
+                let amp = vols.ball * if mode == AudioMode::Access { 1.0 } else { 0.4 };
+                Sfx::synth(sfx, Synth::Cue, pan, amp);
+                if mode == AudioMode::Access {
+                    pending.0.push(audio::Scheduled { at: now + 0.3, kind: Synth::Guide, pan: 0.0, vol: vols.ball });
                 }
+                let from = flight.to;
+                start_flight(flight, from, Vec2::new(targets.player_x, -330.0), 0.65, FlightAfter::CounterLanded, Some(0.55));
+                tennis.m.phase = Phase::Return;
             }
-            flight.active = false;
-            reset_ball_to_player(transforms, ball, targets);
         }
         None => do_incoming(tennis, targets, poses, now, mode, vols, pending, flight, ball, transforms),
     }
@@ -961,8 +1126,10 @@ fn do_hit(
             Some(0.61),
         );
     }
-    // stash contact quality in flight resource for the rally resolution
+    // stash the contact snapshot in the flight for the rally resolution
     flight.hit_quality = quality;
+    flight.hit_dir = tennis.m.dir;
+    flight.hit_shot = tennis.m.shot;
 }
 
 // ---- systems ---------------------------------------------------------------
@@ -986,7 +1153,9 @@ fn keyboard(
 ) {
     let sfx = sfx.as_deref();
     if keys.just_pressed(KeyCode::KeyR) {
-        let msg = format!("{} {}", tennis.m.history_ro, tennis.m.score_text_ro());
+        // history_ro already ends with the score line + serve prompt, so
+        // repeating it verbatim avoids announcing the score twice.
+        let msg = tennis.m.history_ro.clone();
         tennis.announce(msg);
         return;
     }
@@ -1166,6 +1335,60 @@ fn settings_keys(
     }
 }
 
+/// Screen-reader focus control for the info block.
+///
+/// * `I` walks Bevy's `InputFocus` (mirrored to AccessKit focus) through
+///   the read-only boxes in visual order, starting at the live status box,
+///   so JAWS/NVDA jump to the announcements and keep speaking them, then
+///   to score / shot / phase / volumes on repeated presses.
+/// * `Esc` clears focus back to the game window, so play keys stay first.
+/// Game input reads `ButtonInput` directly, so focus never breaks play.
+fn info_focus_keys(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut focus: ResMut<InputFocus>,
+    panel: Option<Res<InfoPanel>>,
+) {
+    if keys.just_pressed(KeyCode::KeyI) {
+        if let Some(p) = panel {
+            if p.order.is_empty() {
+                return;
+            }
+            let next = match focus.get() {
+                Some(cur) => p
+                    .order
+                    .iter()
+                    .position(|&e| e == cur)
+                    .map(|i| p.order[(i + 1) % p.order.len()])
+                    .unwrap_or(p.status),
+                None => p.status,
+            };
+            focus.set(next);
+        }
+    } else if keys.just_pressed(KeyCode::Escape) {
+        focus.clear();
+    }
+}
+
+/// Screen-reader → game focus requests.
+///
+/// When JAWS/NVDA itself moves (virtual cursor, touch exploration), winit
+/// forwards an AccessKit `Focus` action as an `ActionRequest` event — honor
+/// it so focus stays in sync both ways. Unknown/stale targets are ignored.
+fn a11y_focus_requests(
+    mut events: EventReader<A11yActionRequest>,
+    mut focus: ResMut<InputFocus>,
+    nodes: Query<(), With<AccessibilityNode>>,
+) {
+    for req in events.read() {
+        if req.action == Action::Focus {
+            let e = Entity::from_bits(req.target.0);
+            if nodes.contains(e) {
+                focus.set(e);
+            }
+        }
+    }
+}
+
 /// Paddles drift toward their targets (JS approach lerp), NOT toward
 /// the ball — the old ball-follow hid the ←/→ aim completely.
 /// Runs even with no flight active, so ←/→ moves the paddle + aim
@@ -1287,7 +1510,6 @@ fn ball_flight(
 
     if t >= 1.0 {
         let after = flight.after;
-        let hit_quality = flight.hit_quality;
         let now = time.elapsed_secs();
         flight.active = false;
         if let Some(b) = ball {
@@ -1295,7 +1517,41 @@ fn ball_flight(
                 FlightAfter::ServeLanded => land_serve(&mut commands, sfx, &vols, *mode, &mut pending, &mut tennis, &mut targets, &mut poses, now, &mut flight, b, &mut transforms, &pa, &mut particles),
                 FlightAfter::IncomingLanded => land_incoming(sfx, &vols, *mode, &mut tennis),
                 FlightAfter::ReturnLanded => {
-                    land_return(&mut commands, sfx, &vols, *mode, &mut pending, &mut tennis, &mut targets, &mut poses, now, &mut flight, b, &mut transforms, &pa, &mut particles, hit_quality);
+                    land_return(&mut commands, sfx, &vols, *mode, &mut pending, &mut tennis, &mut targets, &mut poses, now, &mut flight, b, &mut transforms, &pa, &mut particles);
+                }
+                FlightAfter::OutLanded => {
+                    // Miss confirmed where it lands: score + call now, in
+                    // the quiet window after the flight — not at takeoff
+                    // under the line call.
+                    let r = tennis.m.score_point(1, "AUT! Mingea ta a ieșit afară");
+                    let msg = r.message_ro.clone();
+                    tennis.announce(msg);
+                    umpire_call(sfx, &vols, &r.umpire);
+                    Sfx::synth(sfx, Synth::Bad, 0.0, vols.ball);
+                    if rand::thread_rng().gen::<f32>() < 0.40 {
+                        Sfx::clip(sfx, "reaction", 0.0, vols.crowd);
+                    }
+                    reset_ball_to_player(&mut transforms, b, &targets);
+                    if tennis.m.phase != Phase::Finished {
+                        tennis.m.phase = Phase::Ready;
+                    }
+                }
+                FlightAfter::CounterLanded => {
+                    // His reply beat you: score + call now, in the quiet
+                    // window after the flight — the takeoff stayed clean
+                    // (racket + Cue + guide + bounce) so it could be heard.
+                    let r = tennis.m.score_point(1, "Contraatac! Adversarul a câștigat punctul");
+                    let msg = r.message_ro.clone();
+                    tennis.announce(msg);
+                    umpire_call(sfx, &vols, &r.umpire);
+                    Sfx::synth(sfx, Synth::Bad, 0.0, vols.ball);
+                    if rand::thread_rng().gen::<f32>() < 0.40 {
+                        Sfx::clip(sfx, "reaction", 0.0, vols.crowd);
+                    }
+                    reset_ball_to_player(&mut transforms, b, &targets);
+                    if tennis.m.phase != Phase::Finished {
+                        tennis.m.phase = Phase::Ready;
+                    }
                 }
                 FlightAfter::None => {}
             }
@@ -1401,7 +1657,10 @@ fn hit_timeout(
     };
     if expired {
         tennis.hit_window = None;
-        let r = tennis.m.score_point(1, "Ai ratat mingea");
+        // Distinct from the whiff ("too far") message: here the 1.4s hitting
+        // window lapsed with no swing at all (Space never pressed in time),
+        // so say so — otherwise a slightly-late press feels like a stolen point.
+        let r = tennis.m.score_point(1, "Timp expirat! N-ai lovit la semnal");
         let msg = r.message_ro.clone();
         tennis.announce(msg);
         let sfx = sfx.as_deref();
@@ -1414,16 +1673,30 @@ fn hit_timeout(
     }
 }
 
+fn refresh_box(node: &mut AccessibilityNode, label: &str, value: &str, live: bool) {
+    // Self-healing: re-assert the read-only-box shape every refresh so the
+    // focus tree stays intact even if another system touched the node.
+    node.set_role(Role::MultilineTextInput);
+    node.set_label(label.to_string().into_boxed_str());
+    node.set_read_only();
+    node.add_action(Action::Focus);
+    if live {
+        node.set_live(Live::Polite);
+        node.set_live_atomic();
+    }
+    set_node_value(node, value);
+}
+
 fn refresh_ui(
     tennis: Res<Tennis>,
     vols: Res<Volumes>,
     mode: Res<AudioMode>,
     sfx: Option<Res<Sfx>>,
-    mut score_q: Query<&mut Text, With<ScoreText>>,
-    mut status_q: Query<&mut Text, (With<StatusText>, Without<ScoreText>)>,
-    mut shot_q: Query<&mut Text, (With<ShotText>, Without<ScoreText>, Without<StatusText>)>,
-    mut phase_q: Query<&mut Text, (With<PhaseText>, Without<ScoreText>, Without<StatusText>, Without<ShotText>)>,
-    mut mode_q: Query<&mut Text, (With<ModeText>, Without<ScoreText>, Without<StatusText>, Without<ShotText>, Without<PhaseText>)>,
+    mut score_q: Query<(&mut Text, Option<&mut AccessibilityNode>), With<ScoreText>>,
+    mut status_q: Query<(&mut Text, Option<&mut AccessibilityNode>), (With<StatusText>, Without<ScoreText>)>,
+    mut shot_q: Query<(&mut Text, Option<&mut AccessibilityNode>), (With<ShotText>, Without<ScoreText>, Without<StatusText>)>,
+    mut phase_q: Query<(&mut Text, Option<&mut AccessibilityNode>), (With<PhaseText>, Without<ScoreText>, Without<StatusText>, Without<ShotText>)>,
+    mut mode_q: Query<(&mut Text, Option<&mut AccessibilityNode>), (With<ModeText>, Without<ScoreText>, Without<StatusText>, Without<ShotText>, Without<PhaseText>)>,
 ) {
     if !tennis.is_changed() && !vols.is_changed() && !mode.is_changed() {
         return;
@@ -1436,27 +1709,39 @@ fn refresh_ui(
         tennis.m.games[1],
         tennis.m.score_text_ro()
     );
-    for mut t in &mut score_q {
+    for (mut t, a11y) in &mut score_q {
         **t = score_line.clone();
+        if let Some(mut node) = a11y {
+            refresh_box(&mut node, "Scor", &score_line, false);
+        }
     }
-    for mut t in &mut status_q {
+    for (mut t, a11y) in &mut status_q {
         **t = tennis.status_ro.clone();
+        if let Some(mut node) = a11y {
+            refresh_box(&mut node, "Anunțuri", &tennis.status_ro, true);
+        }
     }
     let shot_line = format!(
         "Direcție: {} • Lovitură: {}",
         babilon_core::dir_label_ro(tennis.m.dir),
         tennis.m.shot.label_ro()
     );
-    for mut t in &mut shot_q {
+    for (mut t, a11y) in &mut shot_q {
         **t = shot_line.clone();
+        if let Some(mut node) = a11y {
+            refresh_box(&mut node, "Direcție și lovitură", &shot_line, false);
+        }
     }
     let phase_line = if tennis.paused {
         "PAUZĂ".to_string()
     } else {
         tennis.m.phase.visual_label_ro().to_string()
     };
-    for mut t in &mut phase_q {
+    for (mut t, a11y) in &mut phase_q {
         **t = phase_line.clone();
+        if let Some(mut node) = a11y {
+            refresh_box(&mut node, "Fază joc", &phase_line, false);
+        }
     }
     let diff_label = match tennis.difficulty {
         Difficulty::Easy => "Ușor",
@@ -1473,8 +1758,11 @@ fn refresh_ui(
         (vols.crowd * 100.0) as u32,
         if swapped { "invers" } else { "normal" }
     );
-    for mut t in &mut mode_q {
+    for (mut t, a11y) in &mut mode_q {
         **t = mode_line.clone();
+        if let Some(mut node) = a11y {
+            refresh_box(&mut node, "Mod audio și volum", &mode_line, false);
+        }
     }
 }
 
@@ -1529,11 +1817,29 @@ mod smoke {
             gold: Handle::default(),
             pale: Handle::default(),
         });
+        // Focus plumbing (mirrors the real app: InputDispatchPlugin would
+        // init these; headless we add the pieces the new systems need).
+        app.init_resource::<InputFocus>();
+        app.add_event::<A11yActionRequest>();
+        let status_e = app
+            .world_mut()
+            .spawn((StatusText, live_box("Anunțuri", "test")))
+            .id();
+        let score_e = app
+            .world_mut()
+            .spawn((ScoreText, readonly_box("Scor", "test")))
+            .id();
+        app.insert_resource(InfoPanel {
+            status: status_e,
+            order: vec![score_e, status_e],
+        });
         app.add_systems(
             Update,
             (
                 keyboard,
                 settings_keys,
+                info_focus_keys,
+                a11y_focus_requests,
                 drift_paddles,
                 ball_flight,
                 particle_fx,
@@ -1572,6 +1878,8 @@ mod smoke {
     fn systems_boot_without_query_conflict() {
         bevy::ecs::system::assert_is_system(keyboard);
         bevy::ecs::system::assert_is_system(settings_keys);
+        bevy::ecs::system::assert_is_system(info_focus_keys);
+        bevy::ecs::system::assert_is_system(a11y_focus_requests);
         bevy::ecs::system::assert_is_system(drift_paddles);
         bevy::ecs::system::assert_is_system(ball_flight);
         bevy::ecs::system::assert_is_system(particle_fx);
@@ -1696,6 +2004,51 @@ mod smoke {
     }
 
     #[test]
+    fn info_keys_move_screen_reader_focus() {
+        // I focuses the live status box for JAWS/NVDA; repeated I walks the
+        // whole focus order; Esc returns to game.
+        let mut app = test_app();
+        assert!(app.world().resource::<InputFocus>().get().is_none());
+        let status = app.world().resource::<InfoPanel>().status;
+        let order = app.world().resource::<InfoPanel>().order.clone();
+        press(&mut app, KeyCode::KeyI);
+        assert_eq!(app.world().resource::<InputFocus>().get(), Some(status));
+        press(&mut app, KeyCode::KeyI);
+        let second = order
+            .iter()
+            .position(|&e| e == status)
+            .map(|i| order[(i + 1) % order.len()])
+            .unwrap();
+        assert_eq!(app.world().resource::<InputFocus>().get(), Some(second));
+        press(&mut app, KeyCode::Escape);
+        assert!(app.world().resource::<InputFocus>().get().is_none());
+    }
+
+    #[test]
+    fn info_boxes_are_readonly_focusable_inputs() {
+        // The focus tree must be built from read-only edit boxes, not
+        // static labels: every test-app box is a focusable
+        // MultilineTextInput with ReadOnly set, and the live box also
+        // carries a polite live region.
+        use accesskit::Role;
+        let app = test_app();
+        let panel = app.world().resource::<InfoPanel>();
+        assert!(panel.order.len() >= 2);
+        for &e in &panel.order {
+            let node = app.world().get::<AccessibilityNode>(e).expect("box needs a node");
+            assert_eq!(node.role(), Role::MultilineTextInput, "box must be an edit box");
+            assert!(node.is_read_only(), "box must be read-only");
+            assert!(
+                node.supports_action(accesskit::Action::Focus),
+                "box must be focusable"
+            );
+        }
+        let status_node = app.world().get::<AccessibilityNode>(panel.status).unwrap();
+        assert_eq!(status_node.live(), Some(accesskit::Live::Polite));
+        assert!(status_node.is_live_atomic());
+    }
+
+    #[test]
     fn full_point_flow_without_free_loss() {        let mut app = test_app();
         press(&mut app, KeyCode::KeyS);
         assert_eq!(app.world().resource::<Tennis>().m.phase, Phase::Serve);
@@ -1734,5 +2087,109 @@ mod smoke {
         let scored = t.m.pts[0] + t.m.pts[1] == 1;
         let continued = t.m.phase == Phase::Incoming;
         assert!(scored || continued, "phase={:?} pts={:?}", t.m.phase, t.m.pts);
+    }
+
+    #[test]
+    fn return_uses_hit_time_aim_not_midflight_keys() {
+        // Aim + shot are snapshotted at contact: mashing arrows / 1-2-3
+        // during the 0.92s return flight must not change the outcome,
+        // nor disagree with the "Lovitură … spre …" announcement.
+        let mut app = test_app();
+        press(&mut app, KeyCode::KeyS);
+        app.world_mut().resource_mut::<Flight>().t = 100.0;
+        app.update();
+        if app.world().resource::<Tennis>().m.phase == Phase::Ready {
+            return; // serve ace (8% on Normal), no rally to snapshot
+        }
+        app.world_mut().resource_mut::<Flight>().t = 100.0;
+        app.update();
+        assert_eq!(app.world().resource::<Tennis>().m.phase, Phase::Hit);
+        {
+            let landing_x = app.world().resource::<Flight>().to.x;
+            let paddle = app.world().resource::<Rigs>().player.root;
+            app.world_mut().get_mut::<Transform>(paddle).unwrap().translation.x = landing_x;
+        }
+        press(&mut app, KeyCode::ArrowRight);
+        press(&mut app, KeyCode::ArrowRight);
+        press(&mut app, KeyCode::Digit2); // topspin
+        assert_eq!(app.world().resource::<Tennis>().m.dir, 2);
+        press(&mut app, KeyCode::Space);
+        assert_eq!(app.world().resource::<Tennis>().m.phase, Phase::Return);
+        {
+            let f = app.world().resource::<Flight>();
+            assert_eq!(f.hit_dir, 2);
+            assert_eq!(f.hit_shot, Shot::Topspin);
+        }
+        // Mash keys mid-flight: live aim changes, snapshot must not.
+        press(&mut app, KeyCode::ArrowLeft);
+        press(&mut app, KeyCode::ArrowLeft);
+        press(&mut app, KeyCode::ArrowLeft);
+        press(&mut app, KeyCode::ArrowLeft);
+        press(&mut app, KeyCode::Digit1); // flat
+        assert_eq!(app.world().resource::<Tennis>().m.dir, -2);
+        {
+            let f = app.world().resource::<Flight>();
+            assert_eq!(f.hit_dir, 2, "snapshot must survive mid-flight keys");
+            assert_eq!(f.hit_shot, Shot::Topspin);
+        }
+        // Landing resolves without panic; point or continued rally.
+        app.world_mut().resource_mut::<Flight>().t = 100.0;
+        app.update();
+        let t = app.world().resource::<Tennis>();
+        let scored = t.m.pts[0] + t.m.pts[1] == 1;
+        let continued = t.m.phase == Phase::Incoming;
+        assert!(scored || continued, "phase={:?} pts={:?}", t.m.phase, t.m.pts);
+    }
+
+    fn ball_xy(app: &mut App) -> (f32, f32) {
+        let world = app.world_mut();
+        let mut q = world.query_filtered::<&Transform, With<Ball>>();
+        let tr = q.single(world).unwrap();
+        (tr.translation.x, tr.translation.y)
+    }
+
+    #[test]
+    fn epilogue_landings_score_park_and_ready() {
+        // Out + counter epilogues score WHERE THEY LAND (quiet window after
+        // the flight, so the flight stays audible): landing awards the point
+        // to the opponent, parks the ball, and readies the serve — or stays
+        // Finished after match point.
+        for (after, word) in [(FlightAfter::OutLanded, "AUT"), (FlightAfter::CounterLanded, "Contraatac")] {
+            let mut app = test_app();
+            app.world_mut().resource_mut::<Tennis>().m.phase = Phase::Return;
+            {
+                let mut f = app.world_mut().resource_mut::<Flight>();
+                f.active = true;
+                f.t = 100.0;
+                f.duration = 1.0;
+                f.from = Vec2::new(0.0, 300.0);
+                f.to = Vec2::new(0.0, -330.0);
+                f.after = after;
+                f.bounce_at = None;
+            }
+            app.update();
+            assert!(!app.world().resource::<Flight>().active, "{after:?} still flying");
+            let t = app.world().resource::<Tennis>();
+            assert_eq!(t.m.pts, [0, 1], "{after:?} point not scored");
+            assert!(t.status_ro.contains(word), "{after:?} call missing: {}", t.status_ro);
+            assert_eq!(t.m.phase, Phase::Ready);
+            let (bx, by) = ball_xy(&mut app);
+            assert_eq!((bx, by), (0.0, -260.0), "{after:?} ball not parked");
+        }
+        // Match already over: epilogue landing must not revive Ready.
+        let mut app = test_app();
+        app.world_mut().resource_mut::<Tennis>().m.phase = Phase::Finished;
+        {
+            let mut f = app.world_mut().resource_mut::<Flight>();
+            f.active = true;
+            f.t = 100.0;
+            f.duration = 1.0;
+            f.from = Vec2::new(0.0, 300.0);
+            f.to = Vec2::new(0.0, -330.0);
+            f.after = FlightAfter::CounterLanded;
+            f.bounce_at = None;
+        }
+        app.update();
+        assert_eq!(app.world().resource::<Tennis>().m.phase, Phase::Finished);
     }
 }
