@@ -5,6 +5,7 @@ use bevy::ecs::hierarchy::ChildOf;
 use bevy::ecs::relationship::RelatedSpawnerCommands;
 use bevy::prelude::*;
 
+use crate::text;
 use crate::theme::{UiFonts, GOLD};
 
 // ---- TV scoreboard (top-left broadcast bug) ---------------------------------
@@ -20,7 +21,7 @@ pub(crate) struct SbTexts {
 }
 
 pub(crate) fn scoreboard_texts(m: &Match) -> SbTexts {
-    let (pp, cp) = m.game_points_display();
+    let (pp, cp) = text::game_points_display(m);
     let serve_you = m.is_player_serve();
     let summary = format!(
         "Tabela: TU seturi {}, game-uri {}, puncte {}; CPU seturi {}, game-uri {}, puncte {}; servește {}.",

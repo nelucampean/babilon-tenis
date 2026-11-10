@@ -2,7 +2,7 @@
 use babilon_core::{Difficulty, Phase, Shot, LANE_STEP, MAX_DIR};
 use bevy::prelude::*;
 
-use crate::announce::announce;
+use crate::announce::{announce, Announcer};
 use crate::audio::{AudioCtx, AudioMode, Bus, Pending, Sfx, Synth, VolGroup};
 use crate::ball::Flight;
 
@@ -10,6 +10,7 @@ use crate::gameplay::{do_hit, do_serve, GameWorld, Tennis};
 
 use crate::settings::Settings;
 use crate::state::AppState;
+use crate::text;
 
 // ---- systems ---------------------------------------------------------------
 
@@ -46,7 +47,11 @@ pub(crate) fn pause_key(
     }
 }
 
-pub(crate) fn keyboard(world: GameWorld, keys: Res<ButtonInput<KeyCode>>) {
+pub(crate) fn keyboard(
+    world: GameWorld,
+    keys: Res<ButtonInput<KeyCode>>,
+    announcer: Res<Announcer>,
+) {
     let GameWorld {
         mut commands,
         time,
@@ -67,9 +72,9 @@ pub(crate) fn keyboard(world: GameWorld, keys: Res<ButtonInput<KeyCode>>) {
     } = world;
     let mut audio = AudioCtx::new(sfx.as_deref(), settings.vols, settings.mode, &mut pending);
     if keys.just_pressed(KeyCode::KeyR) {
-        // history_ro already ends with the score line + serve prompt, so
-        // repeating it verbatim avoids announcing the score twice.
-        let msg = tennis.m.history_ro.clone();
+        // Repeat what was last announced, then the current score line so
+        // the listener keeps their bearings.
+        let msg = text::repeat_message_ro(&announcer.status_ro, &tennis.m);
         announce(&mut commands, msg);
         return;
     }
@@ -86,7 +91,7 @@ pub(crate) fn keyboard(world: GameWorld, keys: Res<ButtonInput<KeyCode>>) {
         audio.synth(Synth::Foe(lane), lane as f32 / MAX_DIR as f32, Bus::Ball);
         announce(
             &mut commands,
-            format!("Adversar: {}.", babilon_core::dir_label_ro(lane)),
+            format!("Adversar: {}.", text::dir_label_ro(lane)),
         );
         return;
     }
@@ -101,7 +106,7 @@ pub(crate) fn keyboard(world: GameWorld, keys: Res<ButtonInput<KeyCode>>) {
         audio.synth(Synth::Lane(d), d as f32 / MAX_DIR as f32, Bus::Ball);
         announce(
             &mut commands,
-            format!("Direcție: {}", babilon_core::dir_label_ro(d)),
+            format!("Direcție: {}", text::dir_label_ro(d)),
         );
     }
     if keys.just_pressed(KeyCode::ArrowRight) {
@@ -111,7 +116,7 @@ pub(crate) fn keyboard(world: GameWorld, keys: Res<ButtonInput<KeyCode>>) {
         audio.synth(Synth::Lane(d), d as f32 / MAX_DIR as f32, Bus::Ball);
         announce(
             &mut commands,
-            format!("Direcție: {}", babilon_core::dir_label_ro(d)),
+            format!("Direcție: {}", text::dir_label_ro(d)),
         );
     }
     if keys.just_pressed(KeyCode::Digit1) {

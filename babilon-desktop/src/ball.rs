@@ -8,6 +8,7 @@ use crate::gameplay::{
     land_incoming, land_opponent_serve, land_return, land_serve, reset_ball_to_server, GameWorld,
 };
 use crate::particles::spawn_sparks;
+use crate::text;
 
 #[derive(Component)]
 pub(crate) struct Ball;
@@ -185,8 +186,8 @@ pub(crate) fn ball_flight(world: GameWorld) {
                     // Miss confirmed where it lands: score + call now, in
                     // the quiet window after the flight — not at takeoff
                     // under the line call.
-                    let r = tennis.m.score_point(1, "AUT! Mingea ta a ieșit afară");
-                    let msg = r.message_ro.clone();
+                    let (r, msg) =
+                        text::score_and_message(&mut tennis.m, 1, "AUT! Mingea ta a ieșit afară");
                     crate::announce::announce(&mut commands, msg);
                     audio.umpire(&r.umpire);
                     audio.synth(Synth::Bad, 0.0, Bus::Ball);
@@ -203,10 +204,11 @@ pub(crate) fn ball_flight(world: GameWorld) {
                     // His reply beat you: score + call now, in the quiet
                     // window after the flight — the takeoff stayed clean
                     // (racket + Cue + guide + bounce) so it could be heard.
-                    let r = tennis
-                        .m
-                        .score_point(1, "Contraatac! Adversarul a câștigat punctul");
-                    let msg = r.message_ro.clone();
+                    let (r, msg) = text::score_and_message(
+                        &mut tennis.m,
+                        1,
+                        "Contraatac! Adversarul a câștigat punctul",
+                    );
                     crate::announce::announce(&mut commands, msg);
                     audio.umpire(&r.umpire);
                     audio.synth(Synth::Bad, 0.0, Bus::Ball);

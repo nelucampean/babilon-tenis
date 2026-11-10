@@ -12,6 +12,7 @@ use crate::ball::{Ball, BallShadow, Flight, FlightAfter};
 use crate::layout::NET_Y;
 use crate::particles::{spawn_sparks, ParticleAssets, Particles};
 use crate::settings::Settings;
+use crate::text;
 
 // ---- resources -------------------------------------------------------------
 
@@ -115,7 +116,6 @@ pub(crate) fn do_incoming(
     transforms: &mut Query<&mut Transform>,
     difficulty: Difficulty,
 ) {
-    use babilon_core::dir_label_ro;
     if tennis.m.phase == Phase::Finished {
         return;
     }
@@ -135,7 +135,10 @@ pub(crate) fn do_incoming(
     poses.o_swing_until = now + 0.35;
     announce(
         &mut *commands,
-        format!("Mingea vine spre {}. Pregătește-te!", dir_label_ro(side)),
+        format!(
+            "Mingea vine spre {}. Pregătește-te!",
+            text::dir_label_ro(side)
+        ),
     );
     // Mid-flight guide beep, like the web `setTimeout(..., 490)`.
     audio.guide(now + 0.49, side as f32 / MAX_DIR as f32);
@@ -192,7 +195,6 @@ pub(crate) fn start_opponent_serve_signal(
     transforms: &mut Query<&mut Transform>,
     difficulty: Difficulty,
 ) {
-    use babilon_core::dir_label_ro;
     let origin = tennis.m.serve_origin_lane();
     let player_lane = (targets.player_x / LANE_STEP).round() as i8;
     let target = Match::pick_incoming_side(difficulty, player_lane, rand::thread_rng().gen());
@@ -213,7 +215,7 @@ pub(crate) fn start_opponent_serve_signal(
         &mut *commands,
         format!(
             "Adversarul servește de la {}. Pregătește-te!",
-            dir_label_ro(origin)
+            text::dir_label_ro(origin)
         ),
     );
     // 3-bip countdown to his serve: one now, two scheduled. Same lane
@@ -242,14 +244,16 @@ pub(crate) fn fire_opponent_serve(
     ball: Entity,
     transforms: &mut Query<&mut Transform>,
 ) {
-    use babilon_core::dir_label_ro;
     let origin = tennis.opp_serve_origin;
     let target = tennis.opp_serve_target;
     tennis.m.incoming_side = target;
     targets.opp_x = origin as f32 * LANE_STEP;
     announce(
         &mut *commands,
-        format!("Mingea vine spre {}. Pregătește-te!", dir_label_ro(target)),
+        format!(
+            "Mingea vine spre {}. Pregătește-te!",
+            text::dir_label_ro(target)
+        ),
     );
     let pan = origin as f32 / MAX_DIR as f32;
     audio.synth(Synth::Hit, pan, Bus::Ball);
@@ -370,10 +374,8 @@ pub(crate) fn land_opponent_serve(
     difficulty: Difficulty,
 ) {
     if Match::opponent_serve_is_ace(difficulty, rand::thread_rng().gen()) {
-        let r = tennis
-            .m
-            .score_point(1, "As! Serviciul adversarului te-a prins");
-        let msg = r.message_ro.clone();
+        let (r, msg) =
+            text::score_and_message(&mut tennis.m, 1, "As! Serviciul adversarului te-a prins");
         announce(&mut *commands, msg);
         audio.umpire(&r.umpire);
         audio.synth(Synth::Bad, 0.0, Bus::Ball);
@@ -406,8 +408,7 @@ pub(crate) fn land_serve(
     let mut rng = rand::thread_rng();
     let roll: f32 = rng.gen();
     if Match::serve_is_ace(difficulty, roll) {
-        let r = tennis.m.score_point(0, "As!");
-        let msg = r.message_ro.clone();
+        let (r, msg) = text::score_and_message(&mut tennis.m, 0, "As!");
         announce(&mut *commands, msg);
         audio.umpire(&r.umpire);
         audio.clip("applause", 0.0, Bus::Crowd);
@@ -466,8 +467,7 @@ pub(crate) fn land_return(
     match outcome.point_winner() {
         Some(w) => {
             if w == 0 {
-                let r = tennis.m.score_point(0, "Punct câștigat");
-                let msg = r.message_ro.clone();
+                let (r, msg) = text::score_and_message(&mut tennis.m, 0, "Punct câștigat");
                 announce(&mut *commands, msg);
                 audio.umpire(&r.umpire);
                 audio.clip("applause", 0.0, Bus::Crowd);
@@ -599,8 +599,7 @@ pub(crate) fn do_hit(
     if dx > babilon_core::Match::WHIFF_DISTANCE {
         // Swing and a miss: the ball goes through, point to the opponent.
         tennis.hit_window = None;
-        let r = tennis.m.score_point(1, "Ai ratat mingea");
-        let msg = r.message_ro.clone();
+        let (r, msg) = text::score_and_message(&mut tennis.m, 1, "Ai ratat mingea");
         announce(&mut *commands, format!("{msg} Erai prea departe de minge."));
         audio.umpire(&r.umpire);
         audio.synth(Synth::Bad, 0.0, Bus::Ball);
@@ -620,8 +619,8 @@ pub(crate) fn do_hit(
         &mut *commands,
         format!(
             "Lovitură {} spre {}.",
-            tennis.m.shot.label_ro(),
-            babilon_core::dir_label_ro(tennis.m.dir)
+            text::shot_label_ro(tennis.m.shot),
+            text::dir_label_ro(tennis.m.dir)
         ),
     );
     audio.synth(
@@ -673,10 +672,8 @@ pub(crate) fn hit_timeout(world: GameWorld) {
         // Distinct from the whiff ("too far") message: here the 1.4s hitting
         // window lapsed with no swing at all (Space never pressed in time),
         // so say so — otherwise a slightly-late press feels like a stolen point.
-        let r = tennis
-            .m
-            .score_point(1, "Timp expirat! N-ai lovit la semnal");
-        let msg = r.message_ro.clone();
+        let (r, msg) =
+            text::score_and_message(&mut tennis.m, 1, "Timp expirat! N-ai lovit la semnal");
         announce(&mut commands, msg);
         audio.umpire(&r.umpire);
         audio.synth(Synth::Bad, 0.0, Bus::Ball);

@@ -19,6 +19,7 @@ mod particles;
 mod scoreboard;
 mod settings;
 mod state;
+mod text;
 mod theme;
 
 /// Start the desktop game (window, audio, Startup scene, game loop).

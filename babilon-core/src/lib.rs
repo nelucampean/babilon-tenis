@@ -37,13 +37,6 @@ impl Shot {
             _ => Shot::Flat,
         }
     }
-    pub fn label_ro(self) -> &'static str {
-        match self {
-            Shot::Flat => "plată",
-            Shot::Topspin => "liftată",
-            Shot::Slice => "slice",
-        }
-    }
     /// `typeBonus` in `hit()`: liftată +0.04, slice +0.025.
     pub fn type_bonus(self) -> f32 {
         match self {
@@ -51,16 +44,6 @@ impl Shot {
             Shot::Slice => 0.025,
             Shot::Flat => 0.0,
         }
-    }
-}
-
-pub fn dir_label_ro(dir: Dir) -> &'static str {
-    match dir {
-        d if d <= -2 => "stânga",
-        -1 => "mijloc-stânga",
-        0 => "centru",
-        1 => "mijloc-dreapta",
-        _ => "dreapta",
     }
 }
 
@@ -119,19 +102,6 @@ pub enum Phase {
     Hit,
     Return,
     Finished,
-}
-
-impl Phase {
-    pub fn visual_label_ro(self) -> &'static str {
-        match self {
-            Phase::Ready => "PREGĂTIT PENTRU SERVICIU",
-            Phase::Serve => "SERVICIU",
-            Phase::Incoming => "MINGEA SE APROPIE",
-            Phase::Hit => "LOVEȘTE ACUM",
-            Phase::Return => "MINGEA SPRE ADVERSAR",
-            Phase::Finished => "MECI ÎNCHEIAT",
-        }
-    }
 }
 
 /// English umpire call + MP3 clip key (file stem in `sunete/`).
@@ -227,17 +197,18 @@ pub fn clip_filename(key: &str) -> Option<&'static str> {
     }
 }
 
-const POINT_NAMES_RO: [&str; 4] = ["0", "15", "30", "40"];
 const POINT_NAMES_EN: [&str; 4] = ["love", "fifteen", "thirty", "forty"];
 
-/// A finished point: what to announce (RO for screen reader) and what the
-/// umpire says (EN + clip key for `sunete/`).
+/// A finished point: who won it, what changed in the score, and the
+/// English umpire call (clip key for `sunete/`). User-facing text lives in
+/// the desktop crate's `text` module.
 #[derive(Debug, Clone)]
 pub struct PointResult {
-    /// Romanian sentence, e.g. "Game pentru tine! Seturi: ...".
-    pub message_ro: String,
+    pub winner: usize,
     pub game_won: bool,
     pub set_won: bool,
+    pub tiebreak_won: bool,
+    pub tiebreak_started: bool,
     pub match_finished: bool,
     pub umpire: UmpireCall,
 }
@@ -257,7 +228,6 @@ pub struct Match {
     pub dir: Dir,
     pub shot: Shot,
     pub incoming_side: Dir,
-    pub history_ro: String,
 }
 
 impl Default for Match {
@@ -278,7 +248,6 @@ impl Match {
             dir: 0,
             shot: Shot::Flat,
             incoming_side: 0,
-            history_ro: "Meci nou. Apasă S pentru serviciu.".to_string(),
         }
     }
 
@@ -343,50 +312,6 @@ impl Match {
         }
     }
 
-    /// Romanian score line. Mirrors `scoreText()` in index.html, except the
-    /// point score is server-first per tennis convention ("15-0" = the
-    /// server leads). Labels stay, so screen readers hear unambiguously
-    /// who has what, e.g. "Calculator 15, tu 0. Servește calculatorul."
-    pub fn score_text_ro(&self) -> String {
-        let (s, r) = self.ordered_pts();
-        let v = if self.tiebreak {
-            if self.server == 0 {
-                format!("Tie-break: tu {s}, calculator {r}")
-            } else {
-                format!("Tie-break: calculator {s}, tu {r}")
-            }
-        } else if self.pts[0] >= 3 && self.pts[1] >= 3 {
-            if self.pts[0] == self.pts[1] {
-                "Egalitate".to_string()
-            } else if self.pts[0] > self.pts[1] {
-                "Avantaj tu".to_string()
-            } else {
-                "Avantaj calculator".to_string()
-            }
-        } else if self.server == 0 {
-            format!(
-                "Tu {}, calculator {}",
-                POINT_NAMES_RO[s.min(3) as usize],
-                POINT_NAMES_RO[r.min(3) as usize]
-            )
-        } else {
-            format!(
-                "Calculator {}, tu {}",
-                POINT_NAMES_RO[s.min(3) as usize],
-                POINT_NAMES_RO[r.min(3) as usize]
-            )
-        };
-        let serve = if self.is_player_serve() {
-            "Servește tu"
-        } else {
-            "Servește calculatorul"
-        };
-        format!(
-            "Seturi: tu {}, calculator {}. Game-uri: tu {}, calculator {}. {}. {}.",
-            self.sets[0], self.sets[1], self.games[0], self.games[1], v, serve
-        )
-    }
-
     /// English umpire call + clip. Mirrors `umpireScore()` in index.html,
     /// except the score is server-first per tennis convention: the web
     /// version always led with the player, who always served there.
@@ -437,38 +362,16 @@ impl Match {
         }
     }
 
-    /// TV-scoreboard point columns: `(player, opponent)` display strings —
-    /// "0"/"15"/"30"/"40", "AD" for the advantage holder, bare numbers
-    /// in a tie-break. Deuce shows "40"/"40", like broadcast graphics.
-    pub fn game_points_display(&self) -> (String, String) {
-        if self.tiebreak {
-            return (self.pts[0].to_string(), self.pts[1].to_string());
-        }
-        if self.pts[0] >= 3 && self.pts[1] >= 3 {
-            if self.pts[0] == self.pts[1] {
-                return ("40".to_string(), "40".to_string());
-            }
-            if self.pts[0] > self.pts[1] {
-                return ("AD".to_string(), "40".to_string());
-            }
-            return ("40".to_string(), "AD".to_string());
-        }
-        (
-            POINT_NAMES_RO[self.pts[0].min(3) as usize].to_string(),
-            POINT_NAMES_RO[self.pts[1].min(3) as usize].to_string(),
-        )
-    }
-
     /// Score a finished point. Mirrors `point(winner, reason)` in index.html.
-    pub fn score_point(&mut self, winner: usize, reason_ro: &str) -> PointResult {
+    pub fn score_point(&mut self, winner: usize) -> PointResult {
         debug_assert!(winner <= 1);
         // Who served the point just played — the reference for
         // server-relative umpire clips below. Captured before the score
         // changes it (tie-break rotation depends on points played).
         let point_server = self.current_server();
         self.pts[winner] += 1;
-        let mut msg = format!("{reason_ro}. ");
-        let (mut game_won, mut set_won) = (false, false);
+        let (mut game_won, mut set_won, mut tiebreak_won, mut tiebreak_started) =
+            (false, false, false, false);
 
         if self.tiebreak {
             if self.pts[winner] >= 7 && self.pts[winner].saturating_sub(self.pts[1 - winner]) >= 2 {
@@ -476,11 +379,7 @@ impl Match {
                 self.sets[winner] += 1;
                 self.phase = Phase::Finished;
                 set_won = true;
-                msg += if winner == 0 {
-                    "Ai câștigat tie-break-ul și meciul! "
-                } else {
-                    "Calculatorul a câștigat tie-break-ul și meciul. "
-                };
+                tiebreak_won = true;
             }
         } else if self.pts[winner] >= 4
             && self.pts[winner].saturating_sub(self.pts[1 - winner]) >= 2
@@ -488,11 +387,6 @@ impl Match {
             self.games[winner] += 1;
             self.pts = [0, 0];
             game_won = true;
-            msg += if winner == 0 {
-                "Game pentru tine! "
-            } else {
-                "Game pentru calculator. "
-            };
             // Alternate the service game, like real tennis.
             self.server = 1 - self.server;
             if self.games[winner] >= 6
@@ -501,14 +395,9 @@ impl Match {
                 self.sets[winner] += 1;
                 self.phase = Phase::Finished;
                 set_won = true;
-                msg += if winner == 0 {
-                    "Ai câștigat setul și meciul! "
-                } else {
-                    "Calculatorul a câștigat setul și meciul. "
-                };
             } else if self.games[0] == 6 && self.games[1] == 6 {
                 self.tiebreak = true;
-                msg += "Începe tie-break-ul. ";
+                tiebreak_started = true;
             }
         }
 
@@ -544,20 +433,12 @@ impl Match {
             self.umpire_score()
         };
 
-        msg += &self.score_text_ro();
-        if self.phase == Phase::Ready {
-            msg += if self.is_player_serve() {
-                " Apasă S pentru serviciu."
-            } else {
-                " Adversarul servește."
-            };
-        }
-        self.history_ro = msg.clone();
-
         PointResult {
-            message_ro: msg,
+            winner,
             game_won,
             set_won,
+            tiebreak_won,
+            tiebreak_started,
             match_finished: self.phase == Phase::Finished,
             umpire,
         }
@@ -710,15 +591,6 @@ impl RallyOutcome {
             RallyOutcome::Continue => None,
         }
     }
-
-    pub fn reason_ro(self) -> &'static str {
-        match self {
-            RallyOutcome::Out => "AUT! Mingea ta a ieșit afară",
-            RallyOutcome::Winner => "Punct câștigat",
-            RallyOutcome::Countered => "Adversarul a câștigat punctul",
-            RallyOutcome::Continue => "Schimbul continuă",
-        }
-    }
 }
 
 #[cfg(test)]
@@ -726,15 +598,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn five_lanes_labels_and_clamp() {
-        assert_eq!(dir_label_ro(-2), "stânga");
-        assert_eq!(dir_label_ro(-1), "mijloc-stânga");
-        assert_eq!(dir_label_ro(0), "centru");
-        assert_eq!(dir_label_ro(1), "mijloc-dreapta");
-        assert_eq!(dir_label_ro(2), "dreapta");
-        // out-of-range input still clamps to the outer lanes
-        assert_eq!(dir_label_ro(-9), "stânga");
-        assert_eq!(dir_label_ro(9), "dreapta");
+    fn five_lanes_clamp() {
+        // Out-of-range input still clamps to the outer lanes.
         let mut m = Match::new();
         m.set_dir(9);
         assert_eq!(m.dir, 2);
@@ -791,9 +656,8 @@ mod tests {
     }
 
     #[test]
-    fn new_match_score_text() {
+    fn new_match_umpire_love_all() {
         let m = Match::new();
-        assert!(m.score_text_ro().contains("Tu 0, calculator 0"));
         let u = m.umpire_score();
         assert_eq!(u.text_en, "Love all");
         assert_eq!(u.clip_key.as_deref(), Some("love-all"));
@@ -818,7 +682,7 @@ mod tests {
     fn game_win_resets_points() {
         let mut m = Match::new();
         m.pts = [3, 0];
-        let r = m.score_point(0, "Punct câștigat");
+        let r = m.score_point(0);
         assert!(r.game_won);
         assert_eq!(m.games, [1, 0]);
         assert_eq!(m.pts, [0, 0]);
@@ -829,9 +693,9 @@ mod tests {
     fn needs_two_point_margin() {
         let mut m = Match::new();
         m.pts = [3, 3];
-        let r = m.score_point(0, "Punct");
+        let r = m.score_point(0);
         assert!(!r.game_won, "40-40 + 1 punct nu e game");
-        let r = m.score_point(0, "Punct");
+        let r = m.score_point(0);
         assert!(r.game_won);
     }
 
@@ -840,8 +704,9 @@ mod tests {
         let mut m = Match::new();
         m.games = [5, 6];
         m.pts = [3, 1];
-        let r = m.score_point(0, "Punct");
+        let r = m.score_point(0);
         assert!(r.game_won);
+        assert!(r.tiebreak_started);
         assert!(m.tiebreak);
         assert!(!r.match_finished);
     }
@@ -852,8 +717,8 @@ mod tests {
         m.tiebreak = true;
         m.games = [6, 6];
         m.pts = [6, 4];
-        let r = m.score_point(0, "Punct câștigat");
-        assert!(r.set_won && r.match_finished);
+        let r = m.score_point(0);
+        assert!(r.set_won && r.tiebreak_won && r.match_finished);
         assert_eq!(m.sets, [1, 0]);
         // 11th point of the tie-break is served by the opponent (rotation),
         // so the player wins it as receiver.
@@ -905,7 +770,8 @@ mod tests {
         assert_eq!(Match::position_quality(119.9), 0.66);
         assert_eq!(Match::position_quality(120.0), 0.44);
         assert_eq!(Match::position_quality(500.0), 0.44);
-        assert!(Match::WHIFF_DISTANCE > 0.0);
+        let whiff = Match::WHIFF_DISTANCE;
+        assert!(whiff > 0.0);
     }
 
     #[test]
@@ -915,19 +781,17 @@ mod tests {
         assert!(m.is_player_serve());
         // Win the first game: server flips to the opponent.
         m.pts = [3, 0];
-        let r = m.score_point(0, "Punct");
+        let r = m.score_point(0);
         assert!(r.game_won);
         assert_eq!(m.server, 1);
         assert_eq!(m.current_server(), 1);
         assert!(!m.is_player_serve());
-        assert!(r.message_ro.contains("Adversarul servește"));
-        assert!(m.score_text_ro().contains("Servește calculatorul"));
         // Opponent holds: back to you.
         m.pts = [0, 3];
-        let r = m.score_point(1, "Punct");
+        let r = m.score_point(1);
         assert!(r.game_won);
         assert_eq!(m.server, 0);
-        assert!(r.message_ro.contains("Apasă S pentru serviciu"));
+        assert!(m.is_player_serve());
     }
 
     #[test]
@@ -948,53 +812,21 @@ mod tests {
     }
 
     #[test]
-    fn tv_points_columns() {
-        let mut m = Match::new();
-        assert_eq!(m.game_points_display(), ("0".to_string(), "0".to_string()));
-        m.pts = [1, 2];
-        assert_eq!(
-            m.game_points_display(),
-            ("15".to_string(), "30".to_string())
-        );
-        m.pts = [3, 3];
-        assert_eq!(
-            m.game_points_display(),
-            ("40".to_string(), "40".to_string())
-        );
-        m.pts = [4, 3];
-        assert_eq!(
-            m.game_points_display(),
-            ("AD".to_string(), "40".to_string())
-        );
-        m.pts = [3, 4];
-        assert_eq!(
-            m.game_points_display(),
-            ("40".to_string(), "AD".to_string())
-        );
-        m.tiebreak = true;
-        m.pts = [5, 6];
-        assert_eq!(m.game_points_display(), ("5".to_string(), "6".to_string()));
-    }
-
-    #[test]
     fn score_is_server_first() {
         // You serve, you lead 15-0: unchanged from before.
         let mut m = Match::new();
         m.pts = [1, 0];
-        assert!(m.score_text_ro().contains("Tu 15, calculator 0"));
         let u = m.umpire_score();
         assert_eq!(u.text_en, "fifteen love");
         assert_eq!(u.clip_key.as_deref(), Some("fifteen-love"));
         // He serves, he leads 15-0: "15-0" is HIS 15.
         m.server = 1;
         m.pts = [0, 1];
-        assert!(m.score_text_ro().contains("Calculator 15, tu 0"));
         let u = m.umpire_score();
         assert_eq!(u.text_en, "fifteen love");
         assert_eq!(u.clip_key.as_deref(), Some("fifteen-love"));
         // He serves, you lead 15-0: umpire names the receiver's score last.
         m.pts = [1, 0];
-        assert!(m.score_text_ro().contains("Calculator 0, tu 15"));
         let u = m.umpire_score();
         assert_eq!(u.text_en, "love fifteen");
         assert_eq!(u.clip_key.as_deref(), Some("love-fifteen"));
@@ -1012,7 +844,6 @@ mod tests {
         // Tie-break numbers lead with the holder (first server) too.
         m.tiebreak = true;
         m.pts = [2, 3];
-        assert!(m.score_text_ro().contains("Tie-break: calculator 3, tu 2"));
         assert_eq!(m.umpire_score().text_en, "Tie break. 3 to 2");
     }
 
@@ -1022,17 +853,16 @@ mod tests {
         let mut m = Match::new();
         m.server = 1;
         m.pts = [1, 3];
-        let r = m.score_point(1, "Punct");
+        let r = m.score_point(1);
         assert!(r.game_won);
         assert_eq!(r.umpire.clip_key.as_deref(), Some("game-server"));
         // He serves and you break him: the RECEIVER won the game.
         let mut m = Match::new();
         m.server = 1;
         m.pts = [3, 0];
-        let r = m.score_point(0, "Punct");
+        let r = m.score_point(0);
         assert!(r.game_won);
         assert_eq!(r.umpire.clip_key.as_deref(), Some("game-receiver"));
-        assert!(r.message_ro.contains("Apasă S pentru serviciu"));
     }
 
     #[test]

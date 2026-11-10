@@ -5,7 +5,6 @@
 //! walks them in a single query, so adding or reordering a row no longer
 //! means another marker component and another mutually-exclusive query.
 use accesskit::Role;
-use babilon_core::Difficulty;
 use bevy::a11y::AccessibilityNode;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -17,6 +16,7 @@ use crate::gameplay::Tennis;
 use crate::scoreboard::{scoreboard_texts, SbCell, SbCol, SbRoot};
 use crate::settings::Settings;
 use crate::state::AppState;
+use crate::text;
 use crate::theme::{SERVE_OFF, SERVE_ON};
 
 /// Which side-panel row a text node renders.
@@ -99,11 +99,7 @@ pub(crate) fn refresh_ui(mut hud: HudWorld) {
         return;
     }
 
-    let diff_label = match hud.settings.difficulty {
-        Difficulty::Easy => "Ușor",
-        Difficulty::Normal => "Normal",
-        Difficulty::Hard => "Greu",
-    };
+    let diff_label = text::difficulty_label_ro(hud.settings.difficulty);
     let swapped = hud.sfx.as_deref().map(|s| s.swapped()).unwrap_or(false);
     let lines = Lines {
         score: format!(
@@ -112,18 +108,18 @@ pub(crate) fn refresh_ui(mut hud: HudWorld) {
             hud.tennis.m.sets[1],
             hud.tennis.m.games[0],
             hud.tennis.m.games[1],
-            hud.tennis.m.score_text_ro()
+            text::score_text_ro(&hud.tennis.m)
         ),
         status: hud.announcer.status_ro.clone(),
         shot: format!(
             "Direcție: {} • Lovitură: {}",
-            babilon_core::dir_label_ro(hud.tennis.m.dir),
-            hud.tennis.m.shot.label_ro()
+            text::dir_label_ro(hud.tennis.m.dir),
+            text::shot_label_ro(hud.tennis.m.shot)
         ),
         phase: if *hud.state.get() == AppState::Paused {
             "PAUZĂ".to_string()
         } else {
-            hud.tennis.m.phase.visual_label_ro().to_string()
+            text::phase_label_ro(hud.tennis.m.phase).to_string()
         },
         mode: format!(
             "{} • {} • Volum {}/{}/{} • Stereo {}",
